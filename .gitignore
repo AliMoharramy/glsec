@@ -5,6 +5,7 @@ dist/
 # Test output
 *.out
 coverage.html
+coverage.tsv
 
 # Go
 *.test
