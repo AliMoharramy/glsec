@@ -558,7 +558,7 @@ func matchesExclude(file string, patterns []string) bool {
 // collectDocuments recursively collects all pipeline documents (main + children)
 // without running any rules. The first element is always the root document.
 // Child paths are relative to rootDir at every level, as in GitLab; a missing
-// or unparsable child is reported to w and skipped.
+// or unparsable child, or one outside rootDir, is reported to w and skipped.
 func collectDocuments(w io.Writer, doc *parser.Document, rootDir string, excludePaths []string, seen map[string]bool) []*parser.Document {
 	all := []*parser.Document{doc}
 	for _, child := range parser.ChildPipelinePaths(doc.Root) {
@@ -571,6 +571,12 @@ func collectDocuments(w io.Writer, doc *parser.Document, rootDir string, exclude
 			continue
 		}
 		seen[abs] = true
+		// GitLab rejects local includes outside the project; reading them would
+		// let a pipeline file print lines of other files on the runner.
+		if !withinRoot(rootDir, childPath) {
+			_, _ = fmt.Fprintf(w, "warning: child pipeline %s: outside the repository, skipped\n", filepath.ToSlash(childPath))
+			continue
+		}
 		childDoc, err := parser.ParseFile(childPath)
 		if err != nil {
 			_, _ = fmt.Fprintf(w, "warning: child pipeline %s: %v\n", filepath.ToSlash(childPath), err)
@@ -579,6 +585,40 @@ func collectDocuments(w io.Writer, doc *parser.Document, rootDir string, exclude
 		all = append(all, collectDocuments(w, childDoc, rootDir, excludePaths, seen)...)
 	}
 	return all
+}
+
+// withinRoot reports whether path, after resolving symbolic links, lies inside
+// rootDir. For a path that doesn't exist, its nearest existing parent is resolved.
+func withinRoot(rootDir, path string) bool {
+	root, err := resolvePath(rootDir)
+	if err != nil {
+		return false
+	}
+	p, err := resolvePath(path)
+	if err != nil {
+		return false
+	}
+	rel, err := filepath.Rel(root, p)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel)
+}
+
+func resolvePath(p string) (string, error) {
+	abs, err := filepath.Abs(p)
+	if err != nil {
+		return "", err
+	}
+	if real, err := filepath.EvalSymlinks(abs); err == nil {
+		return real, nil
+	}
+	parent := filepath.Dir(abs)
+	if parent == abs {
+		return abs, nil
+	}
+	dir, err := resolvePath(parent)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, filepath.Base(abs)), nil
 }
 
 // collectFindings runs all applicable rules against doc and returns the findings.

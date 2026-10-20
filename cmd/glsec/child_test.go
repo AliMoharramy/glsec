@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -120,5 +121,64 @@ func TestChildPipelines_RootInSubdirectory(t *testing.T) {
 	_, got, stderr := gl001Files(t, files, "repo/.gitlab-ci.yml")
 	if len(got) != 1 || got[0] != "repo/ci/child.yml" {
 		t.Fatalf("GL001 in %v, want [repo/ci/child.yml]; stderr:\n%s", got, stderr)
+	}
+}
+
+func TestChildPipelines_OutsideRepositorySkipped(t *testing.T) {
+	files := map[string]string{
+		"repo/.gitlab-ci.yml": "a:\n  trigger:\n    include:\n      - local: ../outside/secret.yml\n      - /../outside/secret.yml\n      - ci/../../outside/secret.yml\n      - ci/child.yml\n",
+		"repo/ci/child.yml":   childJob,
+		"outside/secret.yml":  grandJob,
+	}
+	_, got, stderr := gl001Files(t, files, "repo/.gitlab-ci.yml")
+	if len(got) != 1 || got[0] != "repo/ci/child.yml" {
+		t.Fatalf("GL001 in %v, want only [repo/ci/child.yml]; stderr:\n%s", got, stderr)
+	}
+	if !strings.Contains(stderr, "outside the repository, skipped") {
+		t.Errorf("stderr lacks the outside-the-repository warning:\n%s", stderr)
+	}
+	if strings.Contains(stderr, "python:latest") {
+		t.Errorf("stderr shows content of a file outside the repository:\n%s", stderr)
+	}
+}
+
+func TestWithinRoot_Symlinks(t *testing.T) {
+	dir := t.TempDir()
+	repo := filepath.Join(dir, "repo")
+	for _, d := range []string{filepath.Join(repo, "ci"), filepath.Join(dir, "outside")} {
+		if err := os.MkdirAll(d, 0o750); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, f := range []string{filepath.Join(repo, "ci", "child.yml"), filepath.Join(dir, "outside", "secret.yml")} {
+		if err := os.WriteFile(f, []byte(childJob), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Symlink(filepath.Join(dir, "outside", "secret.yml"), filepath.Join(repo, "ci", "escape.yml")); err != nil {
+		t.Skipf("symlinks not available: %v", err)
+	}
+	if err := os.Symlink(filepath.Join(repo, "ci", "child.yml"), filepath.Join(repo, "ci", "inside.yml")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(repo, filepath.Join(dir, "repo-link")); err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		root, path string
+		want       bool
+	}{
+		{repo, filepath.Join(repo, "ci", "child.yml"), true},
+		{repo, filepath.Join(repo, "ci", "inside.yml"), true},
+		{repo, filepath.Join(repo, "ci", "missing.yml"), true},
+		{repo, filepath.Join(repo, "ci", "escape.yml"), false},
+		{repo, filepath.Join(repo, "..", "outside", "secret.yml"), false},
+		{repo, repo + "-sibling", false},
+		{filepath.Join(dir, "repo-link"), filepath.Join(dir, "repo-link", "ci", "missing.yml"), true},
+	}
+	for _, tt := range tests {
+		if got := withinRoot(tt.root, tt.path); got != tt.want {
+			t.Errorf("withinRoot(%s, %s) = %v, want %v", tt.root, tt.path, got, tt.want)
+		}
 	}
 }
