@@ -286,8 +286,9 @@ Enable it in `.glsec.yml`:
 ```yaml
 shellcheck:
   enabled: true
-  path: /usr/bin/shellcheck  # optional — defaults to PATH lookup
 ```
+
+glsec runs `shellcheck` from `PATH`. To use another binary, pass `--shellcheck-path /opt/bin/shellcheck`. A `path:` under `shellcheck:` is honoured only in a config file given with `--config`; in a `.glsec.yml` that glsec picks up from the working directory it is ignored with a warning, because that file usually comes from the repository being scanned, and a merge request could otherwise point it at a program of its own.
 
 ShellCheck findings are reported alongside GL findings and use `SC` rule IDs:
 

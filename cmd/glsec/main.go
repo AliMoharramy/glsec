@@ -88,6 +88,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	noCacheFlag := flags.Bool("no-cache", false, "disable result cache for this run")
 	clearCacheFlag := flags.Bool("clear-cache", false, "remove all cached results and exit")
 	noColorFlag := flags.Bool("no-color", false, "disable colored output")
+	shellcheckPathFlag := flags.String("shellcheck-path", "", "path to the ShellCheck binary (default: shellcheck from PATH)")
 	recursiveFlag := flags.Bool("recursive", false, "recursively scan the given directories for .gitlab-ci.yml files")
 	var nameArgs []string
 	flags.Func("name", "additional filename/path glob to treat as a CI config during --recursive walks (may be repeated)", func(s string) error {
@@ -159,6 +160,17 @@ func run(args []string, stdout, stderr io.Writer) int {
 		cfg.RequireIgnoreReason = true
 	}
 	cfg.ExcludePaths = append(cfg.ExcludePaths, excludeArgs...)
+
+	// A .glsec.yml found in the working directory usually belongs to the
+	// repository being scanned, which may be untrusted: a binary path from it
+	// would let that repository run code (GHSA-pfj6-q8r7-c768).
+	if cfg.ShellCheck.Path != "" && !flagSet(flags, "config") {
+		_, _ = fmt.Fprintf(stderr, "warning: %s: shellcheck.path is ignored in a config file glsec finds by itself; use --shellcheck-path, or pass the file with --config\n", config.DefaultFile)
+		cfg.ShellCheck.Path = ""
+	}
+	if *shellcheckPathFlag != "" {
+		cfg.ShellCheck.Path = *shellcheckPathFlag
+	}
 
 	if len(onlyArgs) > 0 {
 		cfg.Only = ruleIDSet(onlyArgs)
@@ -361,6 +373,17 @@ func writeOutput(w io.Writer, format output.Format, findings []finding.Finding, 
 	default:
 		return output.Write(w, format, findings, jobCount, colorEnabled, isTTY)
 	}
+}
+
+// flagSet reports whether the named flag was given on the command line.
+func flagSet(flags *flag.FlagSet, name string) bool {
+	set := false
+	flags.Visit(func(f *flag.Flag) {
+		if f.Name == name {
+			set = true
+		}
+	})
+	return set
 }
 
 // exitCode returns the process exit code for the given findings and config:
