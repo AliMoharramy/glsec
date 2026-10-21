@@ -28,6 +28,7 @@ var (
 
 func (r *gl024) Check(doc *yaml.Node, file string) []finding.Finding {
 	var findings []finding.Finding
+	inherit := NewInheritance(doc)
 
 	parser.EachJob(doc, func(name *yaml.Node, job *yaml.Node) {
 		lines := CollectJobScriptLines(job)
@@ -35,7 +36,7 @@ func (r *gl024) Check(doc *yaml.Node, file string) []finding.Finding {
 			return
 		}
 		// Windows runners run PowerShell, which has no pipefail (#615).
-		if RunsOnWindows(doc, job) {
+		if inherit.RunsOnWindows(job) {
 			return
 		}
 
@@ -51,7 +52,7 @@ func (r *gl024) Check(doc *yaml.Node, file string) []finding.Finding {
 			if parser.FindKey(job, key) != nil {
 				continue
 			}
-			if seq := InheritedKey(doc, job, key); seq != nil && seq.Kind == yaml.SequenceNode {
+			if seq := inherit.Key(job, key); seq != nil && seq.Kind == yaml.SequenceNode {
 				for _, l := range seq.Content {
 					if l.Kind == yaml.ScalarNode && pipefailRe.MatchString(l.Value) {
 						return

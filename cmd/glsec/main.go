@@ -194,7 +194,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 
 	targets, err := resolveTargets(flags.Args(), *recursiveFlag, recursivePatterns)
 	if err != nil {
-		_, _ = fmt.Fprintf(stderr, "error: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "error: %s\n", output.Sanitize(err.Error()))
 		return 2
 	}
 
@@ -288,18 +288,25 @@ type scanOptions struct {
 // rules, and returns the findings and job count. ok is false if the file could
 // not be parsed or validated; the error has already been reported to stderr.
 func scanRoot(file string, opt scanOptions) (findings []finding.Finding, jobCount, unjustified int, ok bool) {
+	// Child pipelines must stay inside the directory of the pipeline file, and
+	// so must the file itself: a symbolic link out of it would make glsec read
+	// and quote a file outside the repository.
+	if !withinRoot(filepath.Dir(file), file) {
+		_, _ = fmt.Fprintf(opt.stderr, "error: %s: symbolic link to a file outside its directory\n", output.Sanitize(file))
+		return nil, 0, 0, false
+	}
 	doc, err := parser.ParseFile(file)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		_, _ = fmt.Fprintf(opt.stderr, "error: %s\n", output.Sanitize(err.Error()))
 		return nil, 0, 0, false
 	}
 
 	warns, valErr := validate.File(file, doc)
 	for _, w := range warns {
-		fmt.Fprintf(os.Stderr, "warning: %s\n", w)
+		_, _ = fmt.Fprintf(opt.stderr, "warning: %s\n", output.Sanitize(w))
 	}
 	if valErr != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", valErr)
+		_, _ = fmt.Fprintf(opt.stderr, "error: %s\n", output.Sanitize(valErr.Error()))
 		return nil, 0, 0, false
 	}
 
@@ -577,12 +584,12 @@ func collectDocuments(w io.Writer, doc *parser.Document, rootDir string, exclude
 		// GitLab rejects local includes outside the project; reading them would
 		// let a pipeline file print lines of other files on the runner.
 		if !withinRoot(rootDir, childPath) {
-			_, _ = fmt.Fprintf(w, "warning: child pipeline %s: outside the repository, skipped\n", filepath.ToSlash(childPath))
+			_, _ = fmt.Fprintf(w, "warning: child pipeline %s: outside the repository, skipped\n", output.Sanitize(filepath.ToSlash(childPath)))
 			continue
 		}
 		childDoc, err := parser.ParseFile(childPath)
 		if err != nil {
-			_, _ = fmt.Fprintf(w, "warning: child pipeline %s: %v\n", filepath.ToSlash(childPath), err)
+			_, _ = fmt.Fprintf(w, "warning: child pipeline %s: %s\n", output.Sanitize(filepath.ToSlash(childPath)), output.Sanitize(err.Error()))
 			continue
 		}
 		all = append(all, collectDocuments(w, childDoc, rootDir, excludePaths, seen)...)
@@ -652,7 +659,7 @@ func collectFindings(doc *parser.Document, path string, cfg *config.Config, gitl
 			return false
 		}
 		if sm.ExpiredAt(f.Line, f.RuleID, now) {
-			fmt.Fprintf(os.Stderr, "%s:%d: %s suppression has expired, reporting the finding again\n", path, f.Line, f.RuleID)
+			fmt.Fprintf(os.Stderr, "%s:%d: %s suppression has expired, reporting the finding again\n", output.Sanitize(path), f.Line, f.RuleID)
 		}
 		return true
 	}
@@ -718,7 +725,7 @@ func reportUnjustified(sm suppress.Map, path string) int {
 			continue
 		}
 		n++
-		fmt.Fprintf(os.Stderr, "%s:%d: %s is suppressed without a reason; add \"-- why\" to the glsec:ignore comment\n", path, e.Line, e.RuleID)
+		fmt.Fprintf(os.Stderr, "%s:%d: %s is suppressed without a reason; add \"-- why\" to the glsec:ignore comment\n", output.Sanitize(path), e.Line, e.RuleID)
 	}
 	return n
 }

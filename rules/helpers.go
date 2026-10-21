@@ -48,8 +48,8 @@ var windowsTagRe = regexp.MustCompile(`(?i)\bwindows\b`)
 
 // RunsOnWindows reports whether the job's runner tags select a Windows runner,
 // where scripts run in PowerShell rather than a POSIX shell.
-func RunsOnWindows(doc, job *yaml.Node) bool {
-	tags := InheritedKey(doc, job, "tags")
+func (in *Inheritance) RunsOnWindows(job *yaml.Node) bool {
+	tags := in.Key(job, "tags")
 	if tags == nil || tags.Kind != yaml.SequenceNode {
 		return false
 	}
@@ -61,32 +61,54 @@ func RunsOnWindows(doc, job *yaml.Node) bool {
 	return false
 }
 
-// InheritedKey returns the value of key that applies to job: its own, else
-// from the jobs it extends in the same file (later entries of an extends: list
-// override earlier ones), else from default:, else from the top-level
-// before_script:/after_script:. Jobs in included files are not followed.
-func InheritedKey(doc, job *yaml.Node, key string) *yaml.Node {
-	mapping := doc
-	if doc.Kind == yaml.DocumentNode && len(doc.Content) > 0 {
-		mapping = doc.Content[0]
+// maxExtendsDepth is the number of extends: levels GitLab resolves.
+// https://docs.gitlab.com/ci/yaml/#extends
+const maxExtendsDepth = 11
+
+// Inheritance resolves the keys a job inherits within one file. It indexes the
+// top-level keys once, so following extends: chains stays cheap however many
+// jobs the file has.
+type Inheritance struct {
+	mapping *yaml.Node
+	jobs    map[string]*yaml.Node
+}
+
+func NewInheritance(doc *yaml.Node) *Inheritance {
+	mapping := parser.Unwrap(doc)
+	in := &Inheritance{mapping: mapping, jobs: map[string]*yaml.Node{}}
+	if mapping.Kind == yaml.MappingNode {
+		for i := 0; i+1 < len(mapping.Content); i += 2 {
+			name := mapping.Content[i].Value
+			if _, ok := in.jobs[name]; !ok {
+				in.jobs[name] = mapping.Content[i+1]
+			}
+		}
 	}
-	if v := extendedKey(mapping, job, key, map[*yaml.Node]bool{}); v != nil {
+	return in
+}
+
+// Key returns the value of key that applies to job: its own, else from the
+// jobs it extends in the same file (later entries of an extends: list override
+// earlier ones), else from default:, else from the top-level
+// before_script:/after_script:. Jobs in included files are not followed.
+func (in *Inheritance) Key(job *yaml.Node, key string) *yaml.Node {
+	if v := in.extendedKey(job, key, 0, map[*yaml.Node]bool{}); v != nil {
 		return v
 	}
 	if inheritsDefault(job, key) {
-		if def := parser.FindKey(mapping, "default"); def != nil {
+		if def := in.jobs["default"]; def != nil {
 			if v := parser.FindKey(def, key); v != nil {
 				return v
 			}
 		}
 		if key == "before_script" || key == "after_script" {
-			return parser.FindKey(mapping, key)
+			return in.jobs[key]
 		}
 	}
 	return nil
 }
 
-func extendedKey(mapping, job *yaml.Node, key string, seen map[*yaml.Node]bool) *yaml.Node {
+func (in *Inheritance) extendedKey(job *yaml.Node, key string, depth int, seen map[*yaml.Node]bool) *yaml.Node {
 	if job == nil || job.Kind != yaml.MappingNode || seen[job] {
 		return nil
 	}
@@ -95,7 +117,7 @@ func extendedKey(mapping, job *yaml.Node, key string, seen map[*yaml.Node]bool) 
 		return v
 	}
 	ext := parser.FindKey(job, "extends")
-	if ext == nil {
+	if ext == nil || depth >= maxExtendsDepth {
 		return nil
 	}
 	parents := []*yaml.Node{ext}
@@ -106,7 +128,7 @@ func extendedKey(mapping, job *yaml.Node, key string, seen map[*yaml.Node]bool) 
 		if parents[i].Kind != yaml.ScalarNode {
 			continue
 		}
-		if v := extendedKey(mapping, parser.FindKey(mapping, parents[i].Value), key, seen); v != nil {
+		if v := in.extendedKey(in.jobs[parents[i].Value], key, depth+1, seen); v != nil {
 			return v
 		}
 	}

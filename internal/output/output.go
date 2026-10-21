@@ -77,12 +77,12 @@ func writeTable(w io.Writer, findings []finding.Finding, jobCount int, isTTY boo
 		return err
 	}
 	for _, f := range findings {
-		job := f.Job
+		job := Sanitize(f.Job)
 		if job == "" {
 			job = "-"
 		}
 		if _, err := fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%d\t%s\n",
-			strings.ToUpper(string(f.Severity)), f.RuleID, job, f.File, f.Line, f.Message,
+			strings.ToUpper(string(f.Severity)), f.RuleID, job, Sanitize(f.File), f.Line, Sanitize(f.Message),
 		); err != nil {
 			return err
 		}
@@ -127,16 +127,16 @@ func writeDiagnostic(w io.Writer, f finding.Finding, src *sourceCache, colorOn b
 	case finding.Warn:
 		sev = color.Yellow(sev, colorOn)
 	}
-	if _, err := fmt.Fprintf(w, "%s[%s]: %s\n", sev, color.Bold(f.RuleID, colorOn), f.Message); err != nil {
+	if _, err := fmt.Fprintf(w, "%s[%s]: %s\n", sev, color.Bold(f.RuleID, colorOn), Sanitize(f.Message)); err != nil {
 		return err
 	}
 
-	loc := fmt.Sprintf("%s:%d", f.File, f.Line)
+	loc := fmt.Sprintf("%s:%d", Sanitize(f.File), f.Line)
 	if f.Col > 0 {
 		loc += ":" + strconv.Itoa(f.Col)
 	}
 	if f.Job != "" {
-		loc += " (job: " + f.Job + ")"
+		loc += " (job: " + Sanitize(f.Job) + ")"
 	}
 	if _, err := fmt.Fprintf(w, "  --> %s\n", color.Bold(loc, colorOn)); err != nil {
 		return err
@@ -148,7 +148,7 @@ func writeDiagnostic(w io.Writer, f finding.Finding, src *sourceCache, colorOn b
 	}
 	num := strconv.Itoa(f.Line)
 	pad := strings.Repeat(" ", len(num))
-	if _, err := fmt.Fprintf(w, "%s |\n%s | %s\n", pad, num, line); err != nil {
+	if _, err := fmt.Fprintf(w, "%s |\n%s | %s\n", pad, num, sanitizeSource(line)); err != nil {
 		return err
 	}
 	if f.Col > 0 {

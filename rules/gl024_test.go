@@ -4,7 +4,10 @@
 package rules
 
 import (
+	"fmt"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/glsec/glsec/internal/finding"
 	"github.com/glsec/glsec/internal/parser"
@@ -413,5 +416,39 @@ build:
 				t.Errorf("expected 1 finding, got %d", len(f))
 			}
 		})
+	}
+}
+
+// extendsChain returns jobs job0..jobN where each job extends the one before
+// and only job0 sets tags.
+func extendsChain(n int) string {
+	var b strings.Builder
+	b.WriteString("job0:\n  tags: [windows]\n  script: [\"a | b\"]\n")
+	for i := 1; i <= n; i++ {
+		fmt.Fprintf(&b, "job%d:\n  extends: job%d\n  script: [\"a | b\"]\n", i, i-1)
+	}
+	return b.String()
+}
+
+func TestGL024_ExtendsDepthLimit(t *testing.T) {
+	// job11 is eleven levels below job0 and inherits its Windows tags; job12
+	// is past GitLab's limit.
+	var jobs []string
+	for _, f := range findings024(t, extendsChain(12)) {
+		jobs = append(jobs, f.Job)
+	}
+	if len(jobs) != 1 || jobs[0] != "job12" {
+		t.Errorf("got findings for %v, want only job12", jobs)
+	}
+}
+
+func TestGL024_LongExtendsChainIsFast(t *testing.T) {
+	src := extendsChain(5000)
+	done := make(chan struct{})
+	go func() { findings024(t, src); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("a 5000-job extends chain did not finish in 5s")
 	}
 }

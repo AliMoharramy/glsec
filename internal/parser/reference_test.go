@@ -4,6 +4,8 @@
 package parser
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -145,5 +147,25 @@ build:
 	}
 	if foo := FindKey(vars, "FOO"); foo == nil || foo.Value != "bar" {
 		t.Errorf("expected FOO=bar, got %+v", foo)
+	}
+}
+
+func TestResolveReferences_NestedReferenceBudget(t *testing.T) {
+	var src strings.Builder
+	src.WriteString(".t0:\n  script: [echo]\n")
+	for i := 1; i <= 40; i++ {
+		fmt.Fprintf(&src, ".t%d:\n  script:\n    - !reference [.t%d, script]\n    - !reference [.t%d, script]\n", i, i-1, i-1)
+	}
+	src.WriteString("job:\n  script:\n    - !reference [.t40, script]\n")
+	doc, err := Parse([]byte(src.String()), "test.yml")
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	limit := 2 * maxExpandedNodes
+	if n := walkCapped(doc.Root, limit); n > limit {
+		t.Errorf("resolved tree exceeds the budget: more than %d nodes", limit)
+	}
+	if got := scriptLines(t, doc, ".t3"); len(got) != 8 {
+		t.Errorf(".t3: got %d script lines, want 8", len(got))
 	}
 }

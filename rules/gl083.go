@@ -199,8 +199,12 @@ func credentialExfilKind(line string) string {
 // pipedCredential reports a credential produced in one pipeline stage and
 // consumed by a network send in a later one. `||` is not a pipe.
 func pipedCredential(line string) string {
-	stages := strings.Split(strings.ReplaceAll(line, "||", "\x00\x00"), "|")
+	stages := pipelineStages(line)
+	sinkAfter := sinksAfter(stages)
 	for i, st := range stages[:len(stages)-1] {
+		if !sinkAfter[i] {
+			continue
+		}
 		src := false
 		if tokenMintRe.MatchString(st) {
 			src = true
@@ -210,16 +214,26 @@ func pipedCredential(line string) string {
 				src = true
 			}
 		}
-		if !src {
-			continue
-		}
-		for _, sink := range stages[i+1:] {
-			if stdinSinkRe.MatchString(sink) {
-				return "credential piped to a network tool"
-			}
+		if src {
+			return "credential piped to a network tool"
 		}
 	}
 	return ""
+}
+
+// pipelineStages splits line at pipes; `||` is not a pipe.
+func pipelineStages(line string) []string {
+	return strings.Split(strings.ReplaceAll(line, "||", "\x00\x00"), "|")
+}
+
+// sinksAfter reports for each stage whether a later stage sends its stdin to
+// the network. One pass from the end keeps a long pipeline linear.
+func sinksAfter(stages []string) []bool {
+	after := make([]bool, len(stages))
+	for i := len(stages) - 2; i >= 0; i-- {
+		after[i] = after[i+1] || stdinSinkRe.MatchString(stages[i+1])
+	}
+	return after
 }
 
 var (
@@ -248,17 +262,20 @@ func environmentSource(s string) bool {
 // environmentExfilKind reports the job's environment, which holds every CI/CD
 // variable including masked ones, reaching a network send on the same line.
 func environmentExfilKind(line string) string {
-	stages := strings.Split(strings.ReplaceAll(line, "||", "\x00\x00"), "|")
+	stages := pipelineStages(line)
+	sinkAfter := sinksAfter(stages)
 	for i, st := range stages[:len(stages)-1] {
-		if !environmentSource(st) {
-			continue
-		}
-		for _, sink := range stages[i+1:] {
-			if stdinSinkRe.MatchString(sink) {
-				return "environment piped to a network tool"
-			}
+		if sinkAfter[i] && environmentSource(st) {
+			return "environment piped to a network tool"
 		}
 	}
+	// A network tool outside a substitution is one that ends before it starts
+	// or starts after it ends; the first end and the last start decide that.
+	tools := netToolRe.FindAllStringIndex(line, -1)
+	if len(tools) == 0 {
+		return environmentSocketKind(line)
+	}
+	firstEnd, lastStart := tools[0][1], tools[len(tools)-1][0]
 	for _, m := range envSubstRe.FindAllStringSubmatchIndex(line, -1) {
 		inner := ""
 		switch {
@@ -267,11 +284,15 @@ func environmentExfilKind(line string) string {
 		case m[4] >= 0:
 			inner = line[m[4]:m[5]]
 		}
-		outside := line[:m[0]] + " " + line[m[1]:]
-		if environmentSource(strings.TrimSpace(inner)) && netToolRe.MatchString(outside) {
+		if (firstEnd <= m[0] || lastStart >= m[1]) && environmentSource(strings.TrimSpace(inner)) {
 			return "environment sent in a request"
 		}
 	}
+	return environmentSocketKind(line)
+}
+
+// environmentSocketKind reports the environment written to a raw socket.
+func environmentSocketKind(line string) string {
 	if socketWriteRe.MatchString(line) {
 		before := line[:socketWriteRe.FindStringIndex(line)[0]]
 		if environmentSource(before) {
