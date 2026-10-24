@@ -193,6 +193,11 @@ jobs:
             echo "$missing"
             exit 1
           fi
+      - name: Install reuse
+        # Version and hash pinned in .github/requirements/reuse.txt (#684).
+        run: pip install --require-hashes --no-deps -r .github/requirements/reuse.txt
+      # Every file has a license, the license texts are in LICENSES/ (#684).
+      - run: reuse lint
 
   security:
     name: Security (govulncheck)
@@ -233,6 +238,7 @@ jobs:
             --recursive
             --lockfile=requirements.txt:./.github/requirements/check-jsonschema.txt
             --lockfile=requirements.txt:./.github/requirements/zizmor.txt
+            --lockfile=requirements.txt:./.github/requirements/reuse.txt
             ./
 
   dependency-review:
@@ -244,6 +250,9 @@ jobs:
         with:
           fail-on-severity: low
           allow-licenses: MIT, Apache-2.0, BSD-2-Clause, BSD-3-Clause, ISC, MPL-2.0, PSF-2.0, Unlicense, 0BSD
+          # reuse (GPL-3.0) and its dependency python-debian (GPL-2.0) only run in
+          # the license headers job; nothing from them ships with glsec (#684).
+          allow-dependencies-licenses: pkg:pypi/reuse, pkg:pypi/python-debian
 
   zizmor:
     name: Security (zizmor)
