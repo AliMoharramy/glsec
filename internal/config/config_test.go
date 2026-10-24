@@ -6,6 +6,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/glsec/glsec/internal/finding"
@@ -320,5 +321,77 @@ func TestRequireIgnoreReason(t *testing.T) {
 	}
 	if def.RequireIgnoreReason {
 		t.Error("require_ignore_reason must default to false")
+	}
+}
+
+func TestLoad_InvalidConfig(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		src  string
+		want string
+	}{
+		{"invalid YAML", "rules: [\n", "yaml:"},
+		{"top-level list", "- rules\n", "config must be a YAML mapping"},
+		{"top-level string", "not a mapping\n", "config must be a YAML mapping"},
+		{"rule override list", "rules:\n  GL001: [warn]\n", "rule config must be a string or mapping"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), ".glsec.yml")
+			if err := os.WriteFile(path, []byte(tt.src), 0600); err != nil {
+				t.Fatal(err)
+			}
+			cfg, err := Load(path)
+			if err == nil {
+				t.Fatal("expected invalid config to fail")
+			}
+			if cfg != nil {
+				t.Errorf("expected nil config, got %+v", cfg)
+			}
+			if !strings.Contains(err.Error(), path) || !strings.Contains(err.Error(), tt.want) {
+				t.Errorf("expected config path and %q in error, got %v", tt.want, err)
+			}
+		})
+	}
+}
+
+func TestRuleEnabled_CLISelection(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		only map[string]bool
+		skip map[string]bool
+		want [3]bool
+	}{
+		{name: "file defaults", want: [3]bool{true, false, true}},
+		{name: "only includes enabled rule", only: map[string]bool{"GL001": true}, want: [3]bool{true, false, false}},
+		{name: "only keeps file-disabled rule off", only: map[string]bool{"GL002": true}, want: [3]bool{false, false, false}},
+		{name: "only includes rule without override", only: map[string]bool{"GL003": true}, want: [3]bool{false, false, true}},
+		{name: "skip overrides enabled file rule", skip: map[string]bool{"GL001": true}, want: [3]bool{false, false, true}},
+		{name: "skip disables rule without override", skip: map[string]bool{"GL003": true}, want: [3]bool{true, false, false}},
+		{name: "skip wins over only", only: map[string]bool{"GL001": true, "GL003": true}, skip: map[string]bool{"GL001": true}, want: [3]bool{false, false, true}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := parseStr(t, "rules:\n  GL001: warn\n  GL002: off\n")
+			cfg.Only, cfg.Skip = tt.only, tt.skip
+			for i, id := range []string{"GL001", "GL002", "GL003"} {
+				if got := cfg.RuleEnabled(id); got != tt.want[i] {
+					t.Errorf("RuleEnabled(%q) = %v, want %v", id, got, tt.want[i])
+				}
+			}
+		})
+	}
+}
+
+func TestApplySeverity_Unchanged(t *testing.T) {
+	cfg := parseStr(t, "rules:\n  GL001: off\n")
+	for _, id := range []string{"GL001", "GL002"} {
+		t.Run(id, func(t *testing.T) {
+			f := finding.Finding{
+				RuleID: id, Severity: finding.Warn, Job: "build",
+				Message: "test finding", File: "test.yml", Line: 3, Col: 5,
+			}
+			if got := cfg.ApplySeverity(f); got != f {
+				t.Errorf("ApplySeverity changed finding: got %+v, want %+v", got, f)
+			}
+		})
 	}
 }
