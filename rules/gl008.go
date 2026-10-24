@@ -19,28 +19,83 @@ func (r *gl008) ID() string { return "GL008" }
 
 // securityScanJobs are the GitLab-defined job names created when security
 // scan templates are included. Failing these jobs with allow_failure: true
-// causes GitLab to silently skip security result ingestion.
+// causes GitLab to silently skip security result ingestion. The SAST and
+// Dependency Scanning analyzer jobs are listed because they do the actual
+// scanning (names from the current templates; analyzers deprecated in GitLab
+// 16.8 are left out).
 var securityScanJobs = map[string]bool{
+	"sast":                                 true,
+	"secret_detection":                     true,
+	"dast":                                 true,
+	"dast_api":                             true,
+	"container_scanning":                   true,
+	"dependency_scanning":                  true,
+	"coverage_fuzzing":                     true,
+	"api_fuzzing":                          true,
+	"license_scanning":                     true,
+	"iac-sast":                             true,
+	"kics-iac-sast":                        true,
+	"gitlab-advanced-sast":                 true,
+	"gitlab-advanced-sast-cpp":             true,
+	"gitlab-advanced-sast-ext":             true,
+	"gosec-sast":                           true,
+	"spotbugs-sast":                        true,
+	"bandit-sast":                          true,
+	"eslint-sast":                          true,
+	"kubesec-sast":                         true,
+	"pmd-apex-sast":                        true,
+	"security-code-scan-sast":              true,
+	"semgrep-sast":                         true,
+	"sobelow-sast":                         true,
+	"gemnasium-dependency_scanning":        true,
+	"gemnasium-maven-dependency_scanning":  true,
+	"gemnasium-python-dependency_scanning": true,
+}
+
+// templateAllowFailureJobs already get allow_failure: true from their
+// template (.sast-analyzer, .ds-analyzer, .secret-analyzer, container_scanning,
+// iac-sast), so setting it again changes nothing and is not reported.
+var templateAllowFailureJobs = map[string]bool{
+	"secret_detection":                     true,
+	"container_scanning":                   true,
+	"iac-sast":                             true,
+	"kics-iac-sast":                        true,
+	"semgrep-sast":                         true,
+	"gitlab-advanced-sast":                 true,
+	"gitlab-advanced-sast-cpp":             true,
+	"gitlab-advanced-sast-ext":             true,
+	"gosec-sast":                           true,
+	"spotbugs-sast":                        true,
+	"bandit-sast":                          true,
+	"eslint-sast":                          true,
+	"kubesec-sast":                         true,
+	"pmd-apex-sast":                        true,
+	"security-code-scan-sast":              true,
+	"sobelow-sast":                         true,
+	"gemnasium-dependency_scanning":        true,
+	"gemnasium-maven-dependency_scanning":  true,
+	"gemnasium-python-dependency_scanning": true,
+}
+
+// configurationOnlyJobs never run: the templates give them rules: [when: never]
+// and every analyzer has its own rules:, so neither allow_failure nor disabling
+// them has any effect. Disabled scans are caught on the analyzer jobs and by
+// GL082.
+var configurationOnlyJobs = map[string]bool{
 	"sast":                true,
-	"sast-iac":            true,
-	"secret_detection":    true,
-	"dast":                true,
-	"dast_api":            true,
-	"container_scanning":  true,
 	"dependency_scanning": true,
-	"coverage_fuzzing":    true,
-	"api_fuzzing":         true,
-	"license_scanning":    true,
 }
 
 func (r *gl008) Check(doc *yaml.Node, file string) []finding.Finding {
 	var findings []finding.Finding
 
 	parser.EachJob(doc, func(name *yaml.Node, job *yaml.Node) {
-		if !securityScanJobs[name.Value] {
+		if !securityScanJobs[name.Value] || configurationOnlyJobs[name.Value] {
 			return
 		}
-		findings = append(findings, r.checkAllowFailure(name, job, file)...)
+		if !templateAllowFailureJobs[name.Value] {
+			findings = append(findings, r.checkAllowFailure(name, job, file)...)
+		}
 		findings = append(findings, r.checkNeverRuns(name, job, file)...)
 	})
 
