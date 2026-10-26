@@ -135,6 +135,66 @@ func (in *Inheritance) extendedKey(job *yaml.Node, key string, depth int, seen m
 	return nil
 }
 
+// Chain returns the values of key along the job's extends: chain in this
+// file, the job's own first, for keys GitLab deep-merges such as artifacts:
+// and trigger:. default: is not included.
+func (in *Inheritance) Chain(job *yaml.Node, key string) []*yaml.Node {
+	var out []*yaml.Node
+	in.chain(job, key, 0, map[*yaml.Node]bool{}, &out)
+	return out
+}
+
+func (in *Inheritance) chain(job *yaml.Node, key string, depth int, seen map[*yaml.Node]bool, out *[]*yaml.Node) {
+	if job == nil || job.Kind != yaml.MappingNode || seen[job] || depth > maxExtendsDepth {
+		return
+	}
+	seen[job] = true
+	if v := parser.FindKey(job, key); v != nil {
+		*out = append(*out, v)
+	}
+	ext := parser.FindKey(job, "extends")
+	if ext == nil {
+		return
+	}
+	parents := []*yaml.Node{ext}
+	if ext.Kind == yaml.SequenceNode {
+		parents = ext.Content
+	}
+	for i := len(parents) - 1; i >= 0; i-- {
+		if parents[i].Kind == yaml.ScalarNode {
+			in.chain(in.jobs[parents[i].Value], key, depth+1, seen, out)
+		}
+	}
+}
+
+// ExtendsResolved reports whether every job in the job's extends: chain is
+// defined in this file, so Key sees everything the job inherits.
+func (in *Inheritance) ExtendsResolved(job *yaml.Node) bool {
+	return in.extendsResolved(job, 0, map[*yaml.Node]bool{})
+}
+
+func (in *Inheritance) extendsResolved(job *yaml.Node, depth int, seen map[*yaml.Node]bool) bool {
+	if job == nil || job.Kind != yaml.MappingNode || seen[job] || depth >= maxExtendsDepth {
+		return true
+	}
+	seen[job] = true
+	ext := parser.FindKey(job, "extends")
+	if ext == nil {
+		return true
+	}
+	parents := []*yaml.Node{ext}
+	if ext.Kind == yaml.SequenceNode {
+		parents = ext.Content
+	}
+	for _, p := range parents {
+		base, ok := in.jobs[p.Value]
+		if p.Kind != yaml.ScalarNode || !ok || !in.extendsResolved(base, depth+1, seen) {
+			return false
+		}
+	}
+	return true
+}
+
 // inheritsDefault reports whether the job takes key from default:.
 // inherit: default: false opts out of all keys, a list opts in to the keys it names.
 func inheritsDefault(job *yaml.Node, key string) bool {
