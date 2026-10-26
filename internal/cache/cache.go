@@ -174,18 +174,26 @@ func Store(key string, entry *Entry) {
 	}
 }
 
-// Clear removes all cached entries.
+// Clear removes all cached entries. It lists the directory instead of
+// globbing it: a cache path with glob characters such as [ ] would otherwise
+// be read as a pattern and match nothing (#734).
 func Clear() error {
 	dir := Dir()
 	if dir == "" {
 		return nil
 	}
-	entries, err := filepath.Glob(filepath.Join(dir, "*.json"))
+	entries, err := os.ReadDir(dir)
 	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
 		return err
 	}
 	for _, e := range entries {
-		if err := os.Remove(e); err != nil && !os.IsNotExist(err) {
+		if filepath.Ext(e.Name()) != ".json" {
+			continue
+		}
+		if err := os.Remove(filepath.Join(dir, e.Name())); err != nil && !os.IsNotExist(err) {
 			return err
 		}
 	}
