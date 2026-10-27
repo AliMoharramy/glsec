@@ -4,6 +4,7 @@
 package rules
 
 import (
+	"encoding/json"
 	"regexp"
 	"strings"
 
@@ -67,6 +68,11 @@ func checkDockerAuthConfig(node *yaml.Node, file string) []finding.Finding {
 		if !dockerAuthKeyRe.MatchString(v) {
 			continue
 		}
+		// Every credential a variable reference is the runtime-expanded form:
+		// GitLab fills it from masked CI/CD variables, so the file holds none.
+		if dockerAuthCredentialsAreVariables(v) {
+			continue
+		}
 
 		findings = append(findings, finding.Finding{
 			RuleID:   "GL066",
@@ -78,4 +84,51 @@ func checkDockerAuthConfig(node *yaml.Node, file string) []finding.Finding {
 		})
 	}
 	return findings
+}
+
+// dockerAuthCredentialFields lists the JSON members of a registry entry that
+// carry credentials; the registry key itself is a variable in the usual
+// runtime-expanded form and is not inspected.
+var dockerAuthCredentialFields = []string{"username", "password", "auth", "identitytoken", "registrytoken"}
+
+// dockerAuthCredentialsAreVariables reports whether every credential value in
+// an inline DOCKER_AUTH_CONFIG document is a variable reference ($VAR or
+// ${VAR}). Only a document that parses as JSON and actually carries a
+// credential field can pass; anything else stays reported.
+func dockerAuthCredentialsAreVariables(v string) bool {
+	var doc map[string]any
+	if err := json.Unmarshal([]byte(v), &doc); err != nil {
+		return false
+	}
+	if auths, ok := doc["auths"].(map[string]any); ok {
+		return registryCredentialsAreVariables(auths)
+	}
+	auth, ok := doc["auth"]
+	return ok && isVariableReferenceValue(auth)
+}
+
+func registryCredentialsAreVariables(auths map[string]any) bool {
+	sawCredential := false
+	for _, entry := range auths {
+		registry, ok := entry.(map[string]any)
+		if !ok {
+			return false
+		}
+		for _, field := range dockerAuthCredentialFields {
+			value, ok := registry[field]
+			if !ok {
+				continue
+			}
+			sawCredential = true
+			if !isVariableReferenceValue(value) {
+				return false
+			}
+		}
+	}
+	return sawCredential
+}
+
+func isVariableReferenceValue(value any) bool {
+	s, ok := value.(string)
+	return ok && varRefRe.MatchString(strings.TrimSpace(s))
 }
