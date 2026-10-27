@@ -39,7 +39,7 @@ func (r *gl005) Check(doc *yaml.Node, file string) []finding.Finding {
 
 	if def := parser.FindKey(mapping, "default"); def != nil {
 		if artifactsNode := parser.FindKey(def, "artifacts"); artifactsNode != nil {
-			findings = append(findings, checkArtifacts(artifactsNode, file)...)
+			findings = append(findings, checkArtifactPaths(artifactsNode, file)...)
 			if _, e := parser.FindKeyNode(artifactsNode, "expire_in"); e == nil {
 				findings = append(findings, missingExpireIn(artifactsNode, file))
 			}
@@ -48,9 +48,9 @@ func (r *gl005) Check(doc *yaml.Node, file string) []finding.Finding {
 
 	in := NewInheritance(doc)
 	parser.EachJob(doc, func(name *yaml.Node, job *yaml.Node) {
-		// Upload settings are checked where they are written, templates included.
+		// Paths are checked where they are written, templates included.
 		if own := parser.FindKey(job, "artifacts"); own != nil {
-			for _, f := range checkArtifacts(own, file) {
+			for _, f := range checkArtifactPaths(own, file) {
 				f.Job = name.Value
 				findings = append(findings, f)
 			}
@@ -77,7 +77,7 @@ func (r *gl005) Check(doc *yaml.Node, file string) []finding.Finding {
 	return findings
 }
 
-func checkArtifacts(node *yaml.Node, file string) []finding.Finding {
+func checkArtifactPaths(node *yaml.Node, file string) []finding.Finding {
 	var findings []finding.Finding
 
 	for _, section := range []string{"paths", "exclude"} {
@@ -92,17 +92,6 @@ func checkArtifacts(node *yaml.Node, file string) []finding.Finding {
 			// Excluding a sensitive file is the fix, not the problem.
 			findings = append(findings, checkArtifactPath(item, file, section == "paths")...)
 		}
-	}
-
-	if untracked := parser.FindKey(node, "untracked"); untracked != nil && untracked.Value == "true" {
-		findings = append(findings, finding.Finding{
-			RuleID:   "GL005",
-			Severity: finding.Error,
-			Message:  "artifacts:untracked:true can upload all untracked files, including generated secrets, alongside explicit artifact paths — remove untracked: true and list only required paths",
-			File:     file,
-			Line:     untracked.Line,
-			Col:      untracked.Column,
-		})
 	}
 
 	return findings
