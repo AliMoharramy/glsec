@@ -47,6 +47,7 @@ func TestGL028(t *testing.T) {
     paths:
       - dist/
     exclude:
+      - "secrets/"
       - "**/__pycache__/**/*"
       - "**/.env"`,
 			wantHits: 0,
@@ -95,6 +96,28 @@ func TestGL028(t *testing.T) {
       - "**/__pycache__/**/*"`,
 			wantHits:    1,
 			wantMessage: "does not cover sensitive files",
+		},
+		{
+			name: "untracked true with directory-only exclude — reported",
+			yaml: `build:
+  script:
+    - make build
+  artifacts:
+    untracked: true
+    exclude:
+      - "secrets/"`,
+			wantHits: 1,
+		},
+		{
+			name: "untracked true with globbed directory exclude — reported",
+			yaml: `build:
+  script:
+    - make build
+  artifacts:
+    untracked: true
+    exclude:
+      - "**/credentials*/"`,
+			wantHits: 1,
 		},
 		{
 			name: "untracked true with empty exclude — reported",

@@ -4,6 +4,8 @@
 package rules
 
 import (
+	"strings"
+
 	"github.com/glsec/glsec/internal/finding"
 	"github.com/glsec/glsec/internal/parser"
 	"gopkg.in/yaml.v3"
@@ -54,7 +56,11 @@ func hasSensitiveArtifactExclude(excludeNode *yaml.Node) bool {
 	}
 
 	for _, item := range excludeNode.Content {
-		if item.Kind == yaml.ScalarNode && matchesSensitivePattern(item.Value) != "" {
+		// exclude: is not recursive; a directory entry does not filter its files.
+		if item.Kind != yaml.ScalarNode || strings.HasSuffix(item.Value, "/") {
+			continue
+		}
+		if matchesSensitivePattern(item.Value) != "" {
 			return true
 		}
 	}
