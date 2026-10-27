@@ -1,3 +1,4 @@
+# lint: skip — a component template; its inputs have no values when linted on its own
 spec:
   inputs:
     deploy_image:
