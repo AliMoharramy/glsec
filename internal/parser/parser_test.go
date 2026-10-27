@@ -416,3 +416,23 @@ func TestScalarContentLine(t *testing.T) {
 		}
 	}
 }
+
+func TestParseFileNamesAReadFailureOnce(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "pipeline.yml")
+	if err := os.Mkdir(path, 0o750); err != nil {
+		t.Fatalf("create a directory where the file should be: %v", err)
+	}
+
+	_, err := ParseFile(path)
+	if err == nil {
+		t.Fatal("expected an error reading a directory")
+	}
+	var pathErr *fs.PathError
+	if !errors.As(err, &pathErr) {
+		t.Fatalf("expected the os.PathError to survive, got %T: %v", err, err)
+	}
+	if got := strings.Count(err.Error(), path); got != 1 {
+		t.Fatalf("path appears %d times in %q, want 1", got, err)
+	}
+}
