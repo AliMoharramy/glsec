@@ -4,6 +4,7 @@
 package rules
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/glsec/glsec/internal/parser"
@@ -11,9 +12,10 @@ import (
 
 func TestGL028(t *testing.T) {
 	tests := []struct {
-		name     string
-		yaml     string
-		wantHits int
+		name        string
+		yaml        string
+		wantHits    int
+		wantMessage string
 	}{
 		{
 			name: "untracked true without restriction",
@@ -45,20 +47,87 @@ func TestGL028(t *testing.T) {
     paths:
       - dist/
     exclude:
+      - "secrets/"
+      - "**/__pycache__/**/*"
       - "**/.env"`,
 			wantHits: 0,
 		},
 		{
-			name: "untracked true with exclude — safe",
+			name: "untracked true with key exclude — safe",
 			yaml: `build:
   script:
     - make build
   artifacts:
     untracked: true
     exclude:
-      - "**/.env"
       - "**/*.key"`,
 			wantHits: 0,
+		},
+		{
+			name: "untracked true with pem exclude — safe",
+			yaml: `build:
+  script:
+    - make build
+  artifacts:
+    untracked: true
+    exclude:
+      - "**/*.pem"`,
+			wantHits: 0,
+		},
+		{
+			name: "untracked true with credentials exclude — safe",
+			yaml: `build:
+  script:
+    - make build
+  artifacts:
+    untracked: true
+    exclude:
+      - "**/credentials*"`,
+			wantHits: 0,
+		},
+		{
+			name: "untracked true with unrelated exclude — reported",
+			yaml: `build:
+  script:
+    - make build
+  artifacts:
+    untracked: true
+    exclude:
+      - "**/__pycache__/**/*"`,
+			wantHits:    1,
+			wantMessage: "does not cover sensitive files",
+		},
+		{
+			name: "untracked true with directory-only exclude — reported",
+			yaml: `build:
+  script:
+    - make build
+  artifacts:
+    untracked: true
+    exclude:
+      - "secrets/"`,
+			wantHits: 1,
+		},
+		{
+			name: "untracked true with globbed directory exclude — reported",
+			yaml: `build:
+  script:
+    - make build
+  artifacts:
+    untracked: true
+    exclude:
+      - "**/credentials*/"`,
+			wantHits: 1,
+		},
+		{
+			name: "untracked true with empty exclude — reported",
+			yaml: `build:
+  script:
+    - make build
+  artifacts:
+    untracked: true
+    exclude: []`,
+			wantHits: 1,
 		},
 		{
 			name: "untracked false — safe",
@@ -106,6 +175,9 @@ test:
 				for _, f := range findings {
 					t.Logf("  finding: %s", f.Message)
 				}
+			}
+			if tt.wantMessage != "" && len(findings) == 1 && !strings.Contains(findings[0].Message, tt.wantMessage) {
+				t.Errorf("finding message %q does not contain %q", findings[0].Message, tt.wantMessage)
 			}
 		})
 	}
