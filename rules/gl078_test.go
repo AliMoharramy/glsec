@@ -82,6 +82,49 @@ func TestGL078_CleanFile(t *testing.T) {
 	}
 }
 
+func TestGL078_JoinerInTextContexts(t *testing.T) {
+	// Joiners are spelling, not payload, in these contexts.
+	tests := []struct{ name, content string }{
+		{"Persian ZWNJ", "build:\n  script:\n    - echo \"| Android | [app.apk - اندروید (توصیه\u200cشده)](app.apk) |\"\n"},
+		{"Devanagari ZWNJ", "build:\n  script:\n    - echo \"क\u200cष\"\n"},
+		{"Devanagari ZWJ", "build:\n  script:\n    - echo \"क\u200dष\"\n"},
+		{"emoji ZWJ", "build:\n  script:\n    - echo \"👨\u200d👩\"\n"},
+		{"emoji ZWJ with variation selector", "build:\n  script:\n    - echo \"❤\ufe0f\u200d🔥\"\n"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if f := findings078(t, tt.content); len(f) != 0 {
+				t.Fatalf("expected no finding, got %d", len(f))
+			}
+		})
+	}
+}
+
+func TestGL078_JoinerOutsideText(t *testing.T) {
+	tests := []struct{ name, content string }{
+		{"ZWNJ between ASCII", "build:\n  script:\n    - echo \"a\u200cb\"\n"},
+		{"ZWNJ next to punctuation", "build:\n  script:\n    - echo \"a\u200c\"\n"},
+		{"ZWNJ between Latin and Arabic", "build:\n  script:\n    - echo \"a\u200cش\"\n"},
+		{"ZWJ between ASCII", "build:\n  script:\n    - echo \"a\u200db\"\n"},
+		{"leading ZWNJ", "build:\n  script:\n    - echo \"\u200cabc\"\n"},
+		{"trailing ZWJ", "build:\n  script:\n    - echo \"abc\u200d\"\n"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if f := findings078(t, tt.content); len(f) != 1 {
+				t.Fatalf("expected 1 finding, got %d", len(f))
+			}
+		})
+	}
+}
+
+func TestGL078_BidiStillFlaggedInRTLText(t *testing.T) {
+	f := findings078(t, "build:\n  script:\n    - echo \"שלום\u202eאב\"\n")
+	if len(f) != 1 {
+		t.Fatalf("expected 1 finding for a bidirectional control, got %d", len(f))
+	}
+}
+
 func TestGL078_Column(t *testing.T) {
 	f := findings078(t, "build:\n  script:\n    - echo \"\u200bx\"\n")
 	if len(f) != 1 {

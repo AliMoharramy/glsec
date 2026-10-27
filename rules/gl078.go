@@ -6,6 +6,7 @@ package rules
 import (
 	"fmt"
 	"os"
+	"unicode"
 
 	"github.com/glsec/glsec/internal/finding"
 	"gopkg.in/yaml.v3"
@@ -54,6 +55,97 @@ var lineBreakRunes = map[rune]string{
 	0x2029: "PARAGRAPH SEPARATOR",
 }
 
+// joinerScripts are the scripts in which U+200C and U+200D are part of normal
+// spelling: Arabic-script languages such as Persian and Urdu use the zero width
+// non-joiner inside words, and the Indic scripts use both characters in
+// conjuncts. Between two letters of these scripts a joiner is text, not a
+// Trojan Source payload.
+var joinerScripts = []*unicode.RangeTable{
+	unicode.Arabic,
+	unicode.Devanagari,
+	unicode.Bengali,
+	unicode.Gurmukhi,
+	unicode.Gujarati,
+	unicode.Oriya,
+	unicode.Tamil,
+	unicode.Telugu,
+	unicode.Kannada,
+	unicode.Malayalam,
+	unicode.Sinhala,
+}
+
+// emojiRanges holds the blocks that can take part in an emoji ZWJ sequence.
+// The standard library has no emoji table; the ranges are deliberately broad
+// because they only widen the exemption when both sides of the joiner are
+// emoji-like.
+var emojiRanges = [][2]rune{
+	{0x2190, 0x21FF},   // arrows
+	{0x2300, 0x23FF},   // miscellaneous technical
+	{0x25A0, 0x25FF},   // geometric shapes
+	{0x2600, 0x27BF},   // miscellaneous symbols and dingbats
+	{0x2B00, 0x2BFF},   // miscellaneous symbols and arrows
+	{0x1F000, 0x1FAFF}, // pictographs, emoji, flags, skin tones
+}
+
+func inAnyScript(r rune, scripts []*unicode.RangeTable) bool {
+	for _, script := range scripts {
+		if unicode.Is(script, r) {
+			return true
+		}
+	}
+	return false
+}
+
+func isEmoji(r rune) bool {
+	for _, rng := range emojiRanges {
+		if r >= rng[0] && r <= rng[1] {
+			return true
+		}
+	}
+	return false
+}
+
+// emojiBefore reports whether the rune at i can be the left side of an emoji
+// ZWJ sequence. A U+FE0F variation selector belongs to the emoji before it.
+func emojiBefore(runes []rune, i int) bool {
+	if i < 0 {
+		return false
+	}
+	if isEmoji(runes[i]) {
+		return true
+	}
+	return runes[i] == 0xFE0F && i > 0 && isEmoji(runes[i-1])
+}
+
+func emojiAfter(runes []rune, i int) bool {
+	if i >= len(runes) {
+		return false
+	}
+	if isEmoji(runes[i]) {
+		return true
+	}
+	return runes[i] == 0xFE0F && i+1 < len(runes) && isEmoji(runes[i+1])
+}
+
+// joinerFitsText reports whether the joiner at runes[i] belongs to ordinary
+// text rather than a hidden-payload trick: both neighbours are letters of a
+// script that uses it, or it joins an emoji sequence. Everything else stays a
+// finding — between ASCII characters, next to code, or between scripts that do
+// not use the joiner.
+func joinerFitsText(runes []rune, i int) bool {
+	if i == 0 || i+1 >= len(runes) {
+		return false
+	}
+	if runes[i] == 0x200D && emojiBefore(runes, i-1) && emojiAfter(runes, i+1) {
+		return true
+	}
+	prev, next := runes[i-1], runes[i+1]
+	if !unicode.IsLetter(prev) || !unicode.IsLetter(next) {
+		return false
+	}
+	return inAnyScript(prev, joinerScripts) && inAnyScript(next, joinerScripts)
+}
+
 // Check scans the raw file bytes (not the parsed YAML tree) because these
 // control characters are invisible in the node values a tree walk would see.
 func (r *gl078) Check(_ *yaml.Node, file string) []finding.Finding {
@@ -64,7 +156,8 @@ func (r *gl078) Check(_ *yaml.Node, file string) []finding.Finding {
 
 	var findings []finding.Finding
 	line, col := 1, 1
-	for i, ch := range string(data) {
+	runes := []rune(string(data))
+	for i, ch := range runes {
 		switch ch {
 		case '\n':
 			line++
@@ -76,7 +169,7 @@ func (r *gl078) Check(_ *yaml.Node, file string) []finding.Finding {
 				continue
 			}
 		}
-		crlf := ch == '\r' && i+1 < len(data) && data[i+1] == '\n'
+		crlf := ch == '\r' && i+1 < len(runes) && runes[i+1] == '\n'
 		if name, ok := lineBreakRunes[ch]; ok && !crlf {
 			findings = append(findings, finding.Finding{
 				RuleID:   "GL078",
@@ -91,6 +184,10 @@ func (r *gl078) Check(_ *yaml.Node, file string) []finding.Finding {
 			})
 		}
 		if name, ok := dangerousRunes[ch]; ok {
+			if (ch == 0x200C || ch == 0x200D) && joinerFitsText(runes, i) {
+				col++
+				continue
+			}
 			findings = append(findings, finding.Finding{
 				RuleID:   "GL078",
 				Severity: finding.Warn,
