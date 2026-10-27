@@ -25,7 +25,7 @@ func TestGL028(t *testing.T) {
 			wantHits: 1,
 		},
 		{
-			name: "untracked true with paths — safe",
+			name: "untracked true with paths — reported",
 			yaml: `build:
   script:
     - make build
@@ -33,6 +33,19 @@ func TestGL028(t *testing.T) {
     untracked: true
     paths:
       - dist/`,
+			wantHits: 1,
+		},
+		{
+			name: "untracked true with paths and exclude — safe",
+			yaml: `build:
+  script:
+    - make build
+  artifacts:
+    untracked: true
+    paths:
+      - dist/
+    exclude:
+      - "**/.env"`,
 			wantHits: 0,
 		},
 		{
@@ -64,7 +77,7 @@ func TestGL028(t *testing.T) {
 			wantHits: 0,
 		},
 		{
-			name: "multiple jobs — only one flagged",
+			name: "multiple jobs — both flagged when lacking exclude",
 			yaml: `build:
   script:
     - make build
@@ -77,7 +90,7 @@ test:
     untracked: true
     paths:
       - reports/`,
-			wantHits: 1,
+			wantHits: 2,
 		},
 	}
 

@@ -29,10 +29,6 @@ func (r *gl028) Check(doc *yaml.Node, file string) []finding.Finding {
 			return
 		}
 
-		// Safe if paths: is set (restricts what is uploaded).
-		if pathsNode := parser.FindKey(artifactsNode, "paths"); pathsNode != nil {
-			return
-		}
 		// Safe if exclude: is set (user has explicitly filtered sensitive patterns).
 		if excludeNode := parser.FindKey(artifactsNode, "exclude"); excludeNode != nil {
 			return
@@ -42,7 +38,7 @@ func (r *gl028) Check(doc *yaml.Node, file string) []finding.Finding {
 			RuleID:   "GL028",
 			Severity: finding.Warn,
 			Job:      name.Value,
-			Message:  "artifacts:untracked:true without paths: or exclude: — archives all untracked files including .env, *.key, and other sensitive files; restrict with paths: or add an exclude: list",
+			Message:  "artifacts:untracked:true without exclude: — archives all untracked files including .env, *.key, and other sensitive files; add an exclude: list",
 			File:     file,
 			Line:     untrackedNode.Line,
 			Col:      untrackedNode.Column,
