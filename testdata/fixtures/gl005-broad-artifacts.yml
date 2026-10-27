@@ -1,0 +1,7 @@
+build:
+  script: make
+  artifacts:
+    paths:
+      - ./
+      - .git/
+    expire_in: 1 day

@@ -132,11 +132,19 @@ func checkArtifactPath(item *yaml.Node, file string, sensitive bool) []finding.F
 			Col:      item.Column,
 		})
 	case sensitive:
+		var message string
 		if pat := matchesSensitivePattern(path); pat != "" {
+			message = fmt.Sprintf("artifact path %q matches sensitive file pattern %q — exclude secrets from artifacts", path, pat)
+		} else if isWholeProjectArtifactPath(path) {
+			message = fmt.Sprintf("artifact path %q uploads the whole working directory, potentially including generated secrets — list only required artifact paths", path)
+		} else if strings.Contains("/"+path+"/", "/.git/") {
+			message = fmt.Sprintf("artifact path %q includes a .git directory — artifacts can expose repository history and Git configuration; exclude .git from artifact paths", path)
+		}
+		if message != "" {
 			findings = append(findings, finding.Finding{
 				RuleID:   "GL005",
 				Severity: finding.Error,
-				Message:  fmt.Sprintf("artifact path %q matches sensitive file pattern %q — exclude secrets from artifacts", path, pat),
+				Message:  message,
 				File:     file,
 				Line:     item.Line,
 				Col:      item.Column,
@@ -145,6 +153,14 @@ func checkArtifactPath(item *yaml.Node, file string, sensitive bool) []finding.F
 	}
 
 	return findings
+}
+
+func isWholeProjectArtifactPath(path string) bool {
+	switch strings.TrimSuffix(path, "/") {
+	case ".", "*", "**", "$CI_PROJECT_DIR", "${CI_PROJECT_DIR}":
+		return true
+	}
+	return false
 }
 
 func matchesSensitivePattern(path string) string {
