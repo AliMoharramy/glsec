@@ -29,8 +29,8 @@ func (r *gl028) Check(doc *yaml.Node, file string) []finding.Finding {
 			return
 		}
 
-		// Safe if exclude: is set (user has explicitly filtered sensitive patterns).
-		if excludeNode := parser.FindKey(artifactsNode, "exclude"); excludeNode != nil {
+		// Safe only if exclude: contains a pattern that matches sensitive files.
+		if hasSensitiveArtifactExclude(parser.FindKey(artifactsNode, "exclude")) {
 			return
 		}
 
@@ -38,7 +38,7 @@ func (r *gl028) Check(doc *yaml.Node, file string) []finding.Finding {
 			RuleID:   "GL028",
 			Severity: finding.Warn,
 			Job:      name.Value,
-			Message:  "artifacts:untracked:true without exclude: — archives all untracked files including .env, *.key, and other sensitive files; add an exclude: list",
+			Message:  "artifacts:untracked:true — exclude: is missing or does not cover sensitive files; remove untracked:true and list required files under paths:, or exclude .env, keys, and credentials",
 			File:     file,
 			Line:     untrackedNode.Line,
 			Col:      untrackedNode.Column,
@@ -46,4 +46,18 @@ func (r *gl028) Check(doc *yaml.Node, file string) []finding.Finding {
 	})
 
 	return findings
+}
+
+func hasSensitiveArtifactExclude(excludeNode *yaml.Node) bool {
+	if excludeNode == nil || excludeNode.Kind != yaml.SequenceNode {
+		return false
+	}
+
+	for _, item := range excludeNode.Content {
+		if item.Kind == yaml.ScalarNode && matchesSensitivePattern(item.Value) != "" {
+			return true
+		}
+	}
+
+	return false
 }
