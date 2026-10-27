@@ -39,7 +39,7 @@ func (r *gl005) Check(doc *yaml.Node, file string) []finding.Finding {
 
 	if def := parser.FindKey(mapping, "default"); def != nil {
 		if artifactsNode := parser.FindKey(def, "artifacts"); artifactsNode != nil {
-			findings = append(findings, checkArtifactPaths(artifactsNode, file)...)
+			findings = append(findings, checkArtifacts(artifactsNode, file)...)
 			if _, e := parser.FindKeyNode(artifactsNode, "expire_in"); e == nil {
 				findings = append(findings, missingExpireIn(artifactsNode, file))
 			}
@@ -48,9 +48,9 @@ func (r *gl005) Check(doc *yaml.Node, file string) []finding.Finding {
 
 	in := NewInheritance(doc)
 	parser.EachJob(doc, func(name *yaml.Node, job *yaml.Node) {
-		// Paths are checked where they are written, templates included.
+		// Upload settings are checked where they are written, templates included.
 		if own := parser.FindKey(job, "artifacts"); own != nil {
-			for _, f := range checkArtifactPaths(own, file) {
+			for _, f := range checkArtifacts(own, file) {
 				f.Job = name.Value
 				findings = append(findings, f)
 			}
@@ -77,7 +77,7 @@ func (r *gl005) Check(doc *yaml.Node, file string) []finding.Finding {
 	return findings
 }
 
-func checkArtifactPaths(node *yaml.Node, file string) []finding.Finding {
+func checkArtifacts(node *yaml.Node, file string) []finding.Finding {
 	var findings []finding.Finding
 
 	for _, section := range []string{"paths", "exclude"} {
@@ -92,6 +92,17 @@ func checkArtifactPaths(node *yaml.Node, file string) []finding.Finding {
 			// Excluding a sensitive file is the fix, not the problem.
 			findings = append(findings, checkArtifactPath(item, file, section == "paths")...)
 		}
+	}
+
+	if untracked := parser.FindKey(node, "untracked"); untracked != nil && untracked.Value == "true" {
+		findings = append(findings, finding.Finding{
+			RuleID:   "GL005",
+			Severity: finding.Error,
+			Message:  "artifacts:untracked:true can upload all untracked files, including generated secrets, alongside explicit artifact paths — remove untracked: true and list only required paths",
+			File:     file,
+			Line:     untracked.Line,
+			Col:      untracked.Column,
+		})
 	}
 
 	return findings
@@ -132,11 +143,19 @@ func checkArtifactPath(item *yaml.Node, file string, sensitive bool) []finding.F
 			Col:      item.Column,
 		})
 	case sensitive:
+		var message string
 		if pat := matchesSensitivePattern(path); pat != "" {
+			message = fmt.Sprintf("artifact path %q matches sensitive file pattern %q — exclude secrets from artifacts", path, pat)
+		} else if isWholeProjectArtifactPath(path) {
+			message = fmt.Sprintf("artifact path %q uploads the whole working directory, potentially including generated secrets — list only required artifact paths", path)
+		} else if strings.Contains("/"+path+"/", "/.git/") {
+			message = fmt.Sprintf("artifact path %q includes a .git directory — artifacts can expose repository history and Git configuration; exclude .git from artifact paths", path)
+		}
+		if message != "" {
 			findings = append(findings, finding.Finding{
 				RuleID:   "GL005",
 				Severity: finding.Error,
-				Message:  fmt.Sprintf("artifact path %q matches sensitive file pattern %q — exclude secrets from artifacts", path, pat),
+				Message:  message,
 				File:     file,
 				Line:     item.Line,
 				Col:      item.Column,
@@ -145,6 +164,14 @@ func checkArtifactPath(item *yaml.Node, file string, sensitive bool) []finding.F
 	}
 
 	return findings
+}
+
+func isWholeProjectArtifactPath(path string) bool {
+	switch strings.TrimSuffix(path, "/") {
+	case ".", "*", "**", "$CI_PROJECT_DIR", "${CI_PROJECT_DIR}":
+		return true
+	}
+	return false
 }
 
 func matchesSensitivePattern(path string) string {
