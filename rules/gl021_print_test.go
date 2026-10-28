@@ -55,21 +55,21 @@ func TestPrintedSecret(t *testing.T) {
 	}
 }
 
-func TestSegmentCommandPrints(t *testing.T) {
+func TestSegmentPrintCommand(t *testing.T) {
 	tests := []struct {
 		head string
-		want bool
+		want string
 	}{
-		{"echo ", true},
-		{"  X=1 then printf ", true},
-		{"", false},
-		{"X=1 ", false},
-		{"{ ( ", false},
-		{"echo_wrapper ", false},
+		{"echo ", "echo"},
+		{"  X=1 then printf ", "printf"},
+		{"", ""},
+		{"X=1 ", ""},
+		{"{ ( ", ""},
+		{"echo_wrapper ", ""},
 	}
 	for _, tt := range tests {
-		if got := segmentCommandPrints(tt.head); got != tt.want {
-			t.Errorf("segmentCommandPrints(%q) = %v, want %v", tt.head, got, tt.want)
+		if got := segmentPrintCommand(tt.head); got != tt.want {
+			t.Errorf("segmentPrintCommand(%q) = %q, want %q", tt.head, got, tt.want)
 		}
 	}
 }
