@@ -1,0 +1,15 @@
+# #859: CI_MERGE_REQUEST_SOURCE_BRANCH_SHA in PowerShell syntax must be
+# reported in an MR-triggered job, while a lowercase POSIX reference stays
+# unmatched.
+test:
+  tags: [windows]
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+  script:
+    - git fetch origin $env:CI_MERGE_REQUEST_SOURCE_BRANCH_SHA
+    - git checkout $env:CI_MERGE_REQUEST_SOURCE_BRANCH_SHA
+posix:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+  script:
+    - git fetch origin $ci_merge_request_source_branch_sha

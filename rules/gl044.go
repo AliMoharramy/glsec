@@ -18,8 +18,15 @@ var GL044 = &gl044{}
 
 func (r *gl044) ID() string { return "GL044" }
 
-// mrSourceSHARe matches any reference to CI_MERGE_REQUEST_SOURCE_BRANCH_SHA.
-var mrSourceSHARe = regexp.MustCompile(`\$\{?CI_MERGE_REQUEST_SOURCE_BRANCH_SHA\}?`)
+// mrSourceSHARe matches any reference to CI_MERGE_REQUEST_SOURCE_BRANCH_SHA
+// in POSIX shell form ($CI_MERGE_REQUEST_SOURCE_BRANCH_SHA,
+// ${CI_MERGE_REQUEST_SOURCE_BRANCH_SHA}, case sensitive) and in PowerShell
+// form ($env:CI_MERGE_REQUEST_SOURCE_BRANCH_SHA,
+// ${env:CI_MERGE_REQUEST_SOURCE_BRANCH_SHA}), where variable names are case
+// insensitive, so the env: prefix and the variable name match in any case. A
+// lowercase POSIX reference ($ci_merge_request_source_branch_sha) is a
+// different variable and does not match.
+var mrSourceSHARe = regexp.MustCompile(`\$\{?CI_MERGE_REQUEST_SOURCE_BRANCH_SHA\}?|\$(?i:\{?env:CI_MERGE_REQUEST_SOURCE_BRANCH_SHA\}?)`)
 
 func (r *gl044) Check(doc *yaml.Node, file string) []finding.Finding {
 	var findings []finding.Finding

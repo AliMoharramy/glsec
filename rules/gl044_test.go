@@ -144,6 +144,62 @@ security-scan:
 	}
 }
 
+func TestGL044_PowerShellEnvForm(t *testing.T) {
+	f := findings044(t, `
+test:
+  tags: [windows]
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+  script:
+    - git fetch origin $env:CI_MERGE_REQUEST_SOURCE_BRANCH_SHA
+    - git checkout $env:CI_MERGE_REQUEST_SOURCE_BRANCH_SHA
+`)
+	if len(f) != 2 {
+		t.Fatalf("expected 2 findings for PowerShell $env:CI_MERGE_REQUEST_SOURCE_BRANCH_SHA, got %d: %v", len(f), f)
+	}
+}
+
+func TestGL044_PowerShellBraceEnvForm(t *testing.T) {
+	f := findings044(t, `
+test:
+  tags: [windows]
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+  script:
+    - git checkout ${env:CI_MERGE_REQUEST_SOURCE_BRANCH_SHA}
+`)
+	if len(f) != 1 {
+		t.Fatalf("expected 1 finding for PowerShell ${env:CI_MERGE_REQUEST_SOURCE_BRANCH_SHA}, got %d: %v", len(f), f)
+	}
+}
+
+func TestGL044_PowerShellMixedCaseEnvForm(t *testing.T) {
+	f := findings044(t, `
+test:
+  tags: [windows]
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+  script:
+    - git checkout $Env:CI_MERGE_REQUEST_SOURCE_BRANCH_SHA
+`)
+	if len(f) != 1 {
+		t.Fatalf("expected 1 finding for mixed case $Env:CI_MERGE_REQUEST_SOURCE_BRANCH_SHA, got %d: %v", len(f), f)
+	}
+}
+
+func TestGL044_PosixLowercaseNoFinding(t *testing.T) {
+	f := findings044(t, `
+test:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+  script:
+    - git checkout $ci_merge_request_source_branch_sha
+`)
+	if len(f) != 0 {
+		t.Errorf("expected no findings for lowercase POSIX $ci_merge_request_source_branch_sha, got %d: %v", len(f), f)
+	}
+}
+
 func TestGL044_CurlyBraceSyntax(t *testing.T) {
 	f := findings044(t, `
 scan:
