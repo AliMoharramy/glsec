@@ -5,6 +5,7 @@ package rules
 
 import (
 	"regexp"
+	"strings"
 
 	"github.com/glsec/glsec/internal/finding"
 	"github.com/glsec/glsec/internal/parser"
@@ -20,6 +21,8 @@ func (r *gl024) ID() string { return "GL024" }
 var (
 	// pipefailRe matches a line that enables pipefail.
 	pipefailRe = regexp.MustCompile(`\bpipefail\b`)
+	// The assignment's quotes are outside the substituted command's context.
+	printCommandSubstRe = regexp.MustCompile(`^(?:(?:export|local|readonly|declare)\s+)?[A-Za-z_][A-Za-z0-9_]*="?\$\(`)
 )
 
 func (r *gl024) Check(doc *yaml.Node, file string) []finding.Finding {
@@ -62,13 +65,21 @@ func (r *gl024) Check(doc *yaml.Node, file string) []finding.Finding {
 			}
 		}
 
-		// Find the first command whose output is piped. A | inside quotes, as
+		// Find the first pipeline that needs pipefail. A | inside quotes, as
 		// in sed "s|a|b|" or grep "a|b", is part of an argument.
 		for _, l := range lines {
 			at := firstPipe.get(l, func() int {
+				pipelineLine := -1
 				for _, cmd := range shellCommands(l.Value) {
-					if cmd.piped {
-						return cmd.line
+					if !cmd.piped {
+						pipelineLine = -1
+						continue
+					}
+					if pipelineLine < 0 {
+						pipelineLine = cmd.line
+					}
+					if !isSimplePrintCommand(cmd.text) {
+						return pipelineLine
 					}
 				}
 				return -1
@@ -93,4 +104,42 @@ func (r *gl024) Check(doc *yaml.Node, file string) []finding.Finding {
 	})
 
 	return findings
+}
+
+// isSimplePrintCommand recognises commands that only write an existing value.
+func isSimplePrintCommand(text string) bool {
+	if at := printCommandSubstRe.FindStringIndex(text); at != nil {
+		text = text[at[1]:]
+	}
+	words := commandWords(text)
+	if len(words) == 0 || words[0] != "echo" && words[0] != "printf" {
+		return false
+	}
+	// Keep checking substitutions, compound commands and redirections: they
+	// can do more than print. Quoted or escaped syntax is only argument data.
+	var quote byte
+	for i := 0; i < len(text); i++ {
+		c := text[i]
+		switch {
+		case c == '\\' && quote != '\'':
+			i++
+		case quote == '\'':
+			if c == '\'' {
+				quote = 0
+			}
+		case c == '\'' && quote == 0:
+			quote = c
+		case c == '"':
+			if quote == '"' {
+				quote = 0
+			} else {
+				quote = c
+			}
+		case c == '`' || c == '$' && strings.HasPrefix(text[i:], "$("):
+			return false
+		case quote == 0 && strings.ContainsRune("()<>", rune(c)):
+			return false
+		}
+	}
+	return true
 }

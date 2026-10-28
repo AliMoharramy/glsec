@@ -1,0 +1,21 @@
+# #819: print-only pipes are quiet; a later download pipe still needs pipefail.
+workflow:
+  rules:
+    - when: always
+login:
+  script:
+    - echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
+tag:
+  script:
+    - if echo "$CI_COMMIT_TAG" | grep -q '-'; then echo pre; fi
+normalize:
+  script:
+    - LOWER="$(echo "$NAME" | tr '[:upper:]' '[:lower:]')"
+decode:
+  script:
+    - printf '%s' "$CERT_B64" | base64 -d > cert.pem
+mixed:
+  script:
+    - |
+      echo value | cat
+      curl -fsSL https://example.com/data | jq .
