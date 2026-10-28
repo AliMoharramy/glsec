@@ -4,6 +4,7 @@
 package rules
 
 import (
+	"strconv"
 	"testing"
 
 	"github.com/glsec/glsec/internal/finding"
@@ -349,5 +350,91 @@ debug:
 	}
 	if f[0].Line == 0 {
 		t.Error("expected non-zero line number")
+	}
+}
+
+func TestGL021_PowerShellPrintedSecrets(t *testing.T) {
+	for _, tc := range []struct {
+		name, script, variable string
+	}{
+		{"echo environment variable", `echo $env:DEPLOY_TOKEN`, "$env:DEPLOY_TOKEN"},
+		{"braced environment variable", `echo ${env:DEPLOY_TOKEN}`, "${env:DEPLOY_TOKEN}"},
+		{"mixed-case environment drive", `echo $eNv:DEPLOY_TOKEN`, "$eNv:DEPLOY_TOKEN"},
+		{"host output", `Write-Host "token is $env:DEPLOY_TOKEN"`, "$env:DEPLOY_TOKEN"},
+		{"success output", `Write-Output ${ENV:DEPLOY_PASSWORD}`, "${ENV:DEPLOY_PASSWORD}"},
+		{"information output", `Write-Information $env:API_SECRET -InformationAction Continue`, "$env:API_SECRET"},
+		{"write alias", `write $env:SSH_PRIVATE_KEY`, "$env:SSH_PRIVATE_KEY"},
+		{"mixed-case command", `wRiTe-HoSt $env:DEPLOY_TOKEN`, "$env:DEPLOY_TOKEN"},
+		{"mixed-case output command", `WRITE-OUTPUT $env:DEPLOY_TOKEN`, "$env:DEPLOY_TOKEN"},
+		{"mixed-case information command", `WRITE-INFORMATION $env:DEPLOY_TOKEN`, "$env:DEPLOY_TOKEN"},
+		{"mixed-case alias", `WrItE $env:DEPLOY_TOKEN`, "$env:DEPLOY_TOKEN"},
+		{"mixed-case secret name", `Write-Host ${Env:Deploy_Token}`, "${Env:Deploy_Token}"},
+		{"unscoped PowerShell variable", `Write-Host $DEPLOY_TOKEN`, "$DEPLOY_TOKEN"},
+		{"non-secret before secret", `Write-Output $env:GPG_KEY_ID $env:DEPLOY_TOKEN`, "$env:DEPLOY_TOKEN"},
+		{"host output bypasses pipeline", `Write-Host $env:DEPLOY_TOKEN | Out-Null`, "$env:DEPLOY_TOKEN"},
+		{"host output bypasses success redirection", `Write-Host $env:DEPLOY_TOKEN > token.txt`, "$env:DEPLOY_TOKEN"},
+		{"host output bypasses capture", `$value = $(Write-Host $env:DEPLOY_TOKEN)`, "$env:DEPLOY_TOKEN"},
+		{"information output bypasses pipeline", `Write-Information $env:DEPLOY_TOKEN -InformationAction Continue | Out-Null`, "$env:DEPLOY_TOKEN"},
+		{"quoted redirect is text", `Write-Host "literal 6> $env:DEPLOY_TOKEN"`, "$env:DEPLOY_TOKEN"},
+		{"escaped backtick still expands", "Write-Host \"``$env:DEPLOY_TOKEN\"", "$env:DEPLOY_TOKEN"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := findings021(t, "deploy:\n  tags: [windows]\n  script:\n    - "+strconv.Quote(tc.script)+"\n")
+			if len(f) != 1 {
+				t.Fatalf("got %d findings, want 1", len(f))
+			}
+			want := finding.Finding{
+				RuleID: "GL021", Severity: finding.Warn, Job: "deploy", File: "test.yml", Line: 4, Col: 7,
+				Message: "script prints secret variable " + tc.variable + " — value may appear in job logs",
+			}
+			if f[0] != want {
+				t.Errorf("got %+v, want %+v", f[0], want)
+			}
+		})
+	}
+}
+
+func TestGL021_PowerShellClean(t *testing.T) {
+	for _, script := range []string{
+		`Write-Host '$env:DEPLOY_TOKEN'`,
+		`Write-Output '${env:DEPLOY_TOKEN}'`,
+		`Write-Host $env:GPG_KEY_ID`,
+		`Write-Host ${env:DOCKER_PASSWORD_FILE}`,
+		`Write-Host $env:DEPLOY_TOKENIZER_URL`,
+		`Write-Host $env:DOCKER_TLS_CERTDIR`,
+		`Write-Host $env:CI_RUNNER_SHORT_TOKEN`,
+		`Write-Host $env:deploy_token_url`,
+		`Write-Host $env:ci_runner_short_token`,
+		`Write-Host $env:CI_COMMIT_BRANCH`,
+		`Invoke-WebRequest -Headers $env:API_TOKEN https://example.com`,
+		`my-Write-Host $env:DEPLOY_TOKEN`,
+		`git config helper "Write-Host $env:DEPLOY_TOKEN"`,
+		`echo $env:DEPLOY_TOKEN | docker login --password-stdin`,
+		`Write-Output ${env:DEPLOY_TOKEN} > token.txt`,
+		`Write-Output $env:DEPLOY_TOKEN | Set-Content token.txt`,
+		`Write-Host $env:DEPLOY_TOKEN 6> $null`,
+		`Write-Host $env:DEPLOY_TOKEN *> $null`,
+		`Write-Host $env:DEPLOY_TOKEN 6> 'private log.txt'`,
+		`Write-Information ${env:DEPLOY_TOKEN} -InformationAction Continue 6>> info.log`,
+		"Write-Host \"`$env:DEPLOY_TOKEN\"",
+		`echo $deploy_token`,
+	} {
+		t.Run(script, func(t *testing.T) {
+			f := findings021(t, "deploy:\n  tags: [windows]\n  script:\n    - "+strconv.Quote(script)+"\n")
+			if len(f) != 0 {
+				t.Errorf("got %v, want no findings", f)
+			}
+		})
+	}
+}
+
+func TestGL021_EmptyQuotedCommandFragment(t *testing.T) {
+	for _, script := range []string{`echo'' "$DEPLOY_TOKEN"`, `''echo "$DEPLOY_TOKEN"`, `printf'' '%s' "$DEPLOY_TOKEN"`} {
+		t.Run(script, func(t *testing.T) {
+			f := findings021(t, "debug:\n  script:\n    - "+strconv.Quote(script)+"\n")
+			if len(f) != 1 {
+				t.Fatalf("got %d findings, want 1 for POSIX quoted command fragment", len(f))
+			}
+		})
 	}
 }

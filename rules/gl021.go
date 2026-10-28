@@ -24,9 +24,9 @@ var (
 	// a command without being one.
 	assignRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*=`)
 
-	// gl021VarRefRe matches a whole variable reference, $NAME or ${NAME}; whether
-	// it is a secret is decided on the full name by isSecretName.
-	gl021VarRefRe = regexp.MustCompile(`\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?`)
+	// gl021VarRefRe also accepts PowerShell's $env:NAME and ${env:NAME}.
+	// The env: drive is case insensitive; the capture is the variable name.
+	gl021VarRefRe = regexp.MustCompile(`\$\{?(?i:env:)?([A-Za-z_][A-Za-z0-9_]*)\}?`)
 
 	// secretNameRe matches names carrying a secret indicator after at least one
 	// character, anywhere in the name: SECRET_KEY_BASE and DEPLOY_TOKEN alike.
@@ -45,6 +45,10 @@ var (
 	// singleQuotedRe matches single-quoted spans, whose contents the shell does
 	// not expand (so a secret reference inside them is literal text).
 	singleQuotedRe = regexp.MustCompile(`'[^']*'`)
+
+	// A direct file redirect of PowerShell's information stream (or all
+	// streams) suppresses host output. A merge such as 6>&1 is not a file.
+	gl021InfoFileRedirectRe = regexp.MustCompile(`^(?:6|\*)>>?\s*[^&\s]`)
 )
 
 func (r *gl021) Check(doc *yaml.Node, file string) []finding.Finding {
@@ -99,17 +103,23 @@ func (r *gl021) Check(doc *yaml.Node, file string) []finding.Finding {
 // to stdout/stderr (i.e. the job log). It returns false when the printed value
 // is instead redirected to a file, piped into another command, captured by a
 // command/process substitution, or single-quoted (not expanded) — none of which
-// reach the log absent debug tracing.
+// reach the log absent debug tracing. PowerShell's information stream is
+// separate from success output and needs its own redirection.
 func printedSecret(line string) (string, bool) {
-	// Single-quoted spans are literal; blank them so a `$VAR` inside one does
-	// not count as a reference.
-	s := singleQuotedRe.ReplaceAllString(line, " ")
+	// Single-quoted spans are literal. Keep an empty quoted placeholder so a
+	// filename such as 6> 'private log.txt' still has a redirection target.
+	s := singleQuotedRe.ReplaceAllString(line, "''")
 	if safeCheckRe.MatchString(s) {
 		return "", false
 	}
 
 	for _, loc := range gl021VarRefRe.FindAllStringSubmatchIndex(s, -1) {
-		if !isSecretName(s[loc[2]:loc[3]]) {
+		name := s[loc[2]:loc[3]]
+		powerShell := strings.Contains(s[loc[0]:loc[2]], ":")
+		if powerShell {
+			name = strings.ToUpper(name) // Windows environment names are case insensitive.
+		}
+		if !isSecretName(name) {
 			continue
 		}
 		start, end := loc[0], loc[1]
@@ -128,10 +138,26 @@ func printedSecret(line string) (string, bool) {
 		// The secret must be an argument of a print command that is the
 		// segment's command — not an `echo` buried inside a quoted argument to
 		// another command (e.g. git config credential.helper "!echo $TOKEN").
-		if !segmentCommandPrints(s[left+1 : start]) {
+		command := segmentPrintCommand(s[left+1 : start])
+		if command == "" {
 			continue
 		}
+		if powerShell || strings.HasPrefix(command, "write") {
+			escapeStart := start
+			for escapeStart > 0 && s[escapeStart-1] == '`' {
+				escapeStart--
+			}
+			if (start-escapeStart)%2 != 0 {
+				continue // An unpaired backtick makes the variable reference literal.
+			}
+		}
 		seg := s[left+1 : right]
+		if command == "write-host" || command == "write-information" {
+			if informationRedirected(seg) {
+				continue
+			}
+			return s[start:end], true
+		}
 		// Output redirected to a file (`>` / `>>`): not logged.
 		if strings.Contains(seg, ">") {
 			continue
@@ -148,6 +174,30 @@ func printedSecret(line string) (string, bool) {
 		return s[start:end], true
 	}
 	return "", false
+}
+
+// informationRedirected checks for a direct information-stream file redirect,
+// ignoring operators inside quoted or backtick-escaped argument text.
+func informationRedirected(seg string) bool {
+	var quote byte
+	for i := 0; i < len(seg); i++ {
+		c := seg[i]
+		switch {
+		case c == '`':
+			i++
+		case quote != 0:
+			if c == quote {
+				quote = 0
+			}
+		case c == '\'' || c == '"':
+			quote = c
+		case (c == '6' || c == '*') && (i == 0 || isShellSpace(seg[i-1])):
+			if gl021InfoFileRedirectRe.MatchString(seg[i:]) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // isSecretName reports whether a variable name looks like it holds a secret
@@ -187,19 +237,30 @@ var gl021PrefixTokens = map[string]bool{
 	"then": true, "do": true, "else": true, "elif": true,
 }
 
-// segmentCommandPrints reports whether the command at the start of a segment is
-// a print command (echo/printf/print). It skips leading env assignments and
+// segmentPrintCommand returns the print command at the start of a segment,
+// canonicalizing PowerShell command names. It skips leading env assignments and
 // group/keyword openers, then checks the first real token — so an `echo` that
 // only appears inside a quoted argument (the secret is not actually printed)
 // does not count.
-func segmentCommandPrints(segHead string) bool {
+func segmentPrintCommand(segHead string) string {
+	// Quoted placeholders preserve redirect targets, but command recognition
+	// keeps the earlier behavior of treating single-quoted spans as blanks.
+	segHead = strings.ReplaceAll(segHead, "''", " ")
 	for _, tok := range strings.Fields(segHead) {
 		if assignRe.MatchString(tok) || gl021PrefixTokens[tok] {
 			continue
 		}
-		return tok == "echo" || tok == "printf" || tok == "print"
+		if tok == "echo" || tok == "printf" || tok == "print" {
+			return tok
+		}
+		command := strings.ToLower(tok)
+		switch command {
+		case "write-host", "write-output", "write-information", "write":
+			return command
+		}
+		return ""
 	}
-	return false
+	return ""
 }
 
 // isShellSep reports whether b separates shell commands (pipeline, list, or
