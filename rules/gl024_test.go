@@ -480,3 +480,109 @@ func TestGL024_QuotedPipes(t *testing.T) {
 		}
 	}
 }
+
+func TestGL024_PrintPipelines(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		script string
+		want   int
+	}{
+		{"password stdin", `echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"`, 0},
+		{"conditional", `if echo "$CI_COMMIT_TAG" | grep -q '-'; then echo pre; fi`, 0},
+		{"command substitution", `LOWER="$(echo "$NAME" | tr '[:upper:]' '[:lower:]')"`, 0},
+		{"exported command substitution", `export LOWER="$(echo "$NAME" | tr '[:upper:]' '[:lower:]')"`, 0},
+		{"decode value", `printf '%s' "$CERT_B64" | base64 -d > cert.pem`, 0},
+		{"multiple print commands", `echo data | printf '%s' value | cat`, 0},
+		{"leading assignment", `LANG=C printf '%s' "$VALUE" | grep value`, 0},
+		{"command wrapper", `command printf '%s' "$VALUE" | cat`, 0},
+		{"quoted pipe argument", `echo 'a | b' | cat`, 0},
+		{"quoted redirection argument", `echo '<value>' | cat`, 0},
+		{"escaped quote argument", `echo "\"value\"" | cat`, 0},
+		{"escaped redirection argument", `echo \> value | cat`, 0},
+		{"literal substitution text", `echo '$(not-run)' | cat`, 0},
+		{"literal parentheses", `printf '%s)' "$VALUE" | cat`, 0},
+		{"double-quoted parenthesis", `echo ")" | cat`, 0},
+		{"literal backticks", "echo '`not-run`' | cat", 0},
+		{"failing last command", `echo value | false`, 0},
+		{"download", `curl -fsSL https://example.com/data | jq .`, 1},
+		{"find", `find . -type f | xargs cat`, 1},
+		{"read file", `cat input | grep value`, 1},
+		{"non-print middle command", `echo value | sed s/value/other/ | cat`, 1},
+		{"non-print first command", `curl -fsSL https://example.com/data | printf '%s' value | cat`, 1},
+		{"similar command name", `my_echo value | cat`, 1},
+		{"case-sensitive command", `ECHO value | cat`, 1},
+		{"non-print builtin", `export | cat`, 1},
+		{"nested pipeline in echo", `echo "$(curl -fsSL https://example.com/data | jq .)"`, 1},
+		{"nested pipeline in printf", `printf '%s' "$(curl -fsSL https://example.com/data | jq .)"`, 1},
+		{"backtick substitution", "echo \"`curl -fsSL https://example.com/data`\" | cat", 1},
+		{"compound command ending in echo", `(curl -fsSL https://example.com/data; echo done) | cat`, 1},
+		{"output redirection can fail", `echo value > output | cat`, 1},
+		{"input redirection can fail", `printf '%s' value < input | cat`, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			src := "job:\n  script:\n    - " + strconv.Quote(tc.script) + "\n"
+			f := findings024(t, src)
+			if len(f) != tc.want {
+				t.Fatalf("got %d findings, want %d", len(f), tc.want)
+			}
+			if tc.want == 1 && (f[0].RuleID != "GL024" || f[0].Severity != finding.Warn || f[0].Job != "job" || f[0].File != "test.yml" || f[0].Line != 3) {
+				t.Errorf("unexpected finding attribution: %+v", f[0])
+			}
+		})
+	}
+}
+
+func TestGL024_SkipsPrintPipesBeforeReporting(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		yaml string
+		line int
+		col  int
+	}{
+		{"separate script items", `build:
+  script:
+    - echo value | cat
+    - curl -fsSL https://example.com/data | jq .
+`, 4, 7},
+		{"literal block", `build:
+  script:
+    - |
+      echo value | cat
+      curl -fsSL https://example.com/data | jq .
+`, 5, 0},
+		{"same line", `build:
+  script:
+    - echo value | cat; curl -fsSL https://example.com/data | jq .
+`, 3, 7},
+		{"logical and", `build:
+  script:
+    - echo value | cat && curl -fsSL https://example.com/data | jq .
+`, 3, 7},
+		{"logical or", `build:
+  script:
+    - echo value | cat || curl -fsSL https://example.com/data | jq .
+`, 3, 7},
+		{"before script", `build:
+  before_script:
+    - printf '%s' value | cat
+  script:
+    - curl -fsSL https://example.com/data | jq .
+`, 5, 7},
+		{"later non-print segment", `build:
+  script:
+    - |
+      echo value | \
+        sed s/value/other/ | cat
+`, 4, 7},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := findings024(t, tc.yaml)
+			if len(f) != 1 {
+				t.Fatalf("got %d findings, want 1", len(f))
+			}
+			if f[0].Line != tc.line || f[0].Col != tc.col || f[0].Job != "build" {
+				t.Errorf("got finding at %d:%d for %q, want %d:%d for build", f[0].Line, f[0].Col, f[0].Job, tc.line, tc.col)
+			}
+		})
+	}
+}
