@@ -586,3 +586,140 @@ func TestGL024_SkipsPrintPipesBeforeReporting(t *testing.T) {
 		})
 	}
 }
+
+func TestGL024_PipedLineCount(t *testing.T) {
+	const single = "script uses a pipe without set -o pipefail — failures in all but the last command are silently ignored"
+	const two = "script uses a pipe without set -o pipefail (2 piped lines in this job, first shown) — failures in all but the last command are silently ignored"
+	const three = "script uses a pipe without set -o pipefail (3 piped lines in this job, first shown) — failures in all but the last command are silently ignored"
+	for _, tc := range []struct {
+		name, sections, message string
+		line, col               int
+	}{
+		{"single pipe keeps message", `  script:
+    - make | tee build.log
+`, single, 3, 7},
+		{"separate items", `  script:
+    - curl -fsSL https://example.com/a.tar.gz | tar xz
+    - ./configure | tee configure.log
+    - make 2>&1 | tee build.log
+`, three, 3, 7},
+		{"literal block", `  script:
+    - |
+      echo starting
+      ./configure | tee configure.log
+      make | tee build.log
+`, two, 5, 0},
+		{"several operators on one line", `  script:
+    - curl -fsSL https://example.com/data | jq . | tee data.json
+`, single, 3, 7},
+		{"several pipelines on one line", `  script:
+    - make | tee build.log; test-app | tee test.log
+`, single, 3, 7},
+		{"same line then another line", `  script:
+    - |
+      make | tee build.log && test-app | tee test.log
+      deploy | tee deploy.log
+`, two, 4, 7},
+		{"continued pipeline", `  script:
+    - |
+      curl -fsSL https://example.com/data | \
+        jq . | tee data.json
+      make | tee build.log
+`, two, 4, 7},
+		{"continued print then fallible middle command", `  script:
+    - |
+      echo value | \
+        sed s/value/other/ | cat
+      make | tee build.log
+`, two, 4, 7},
+		{"print-only lines excluded", `  script:
+    - |
+      echo value | cat
+      make | tee build.log
+      printf '%s' "$CERT_B64" | base64 -d > cert.pem
+      test-app | tee test.log
+`, two, 5, 0},
+		{"safe pipeline before unsafe on same line", `  script:
+    - |
+      echo value | cat; make | tee build.log
+      test-app | tee test.log
+`, two, 4, 7},
+		{"quoted pipes redirects and logical or excluded", `  script:
+    - |
+      sed 's|old|new|' input
+      make >| build.log
+      test-app || true
+      # ignored | pipe
+      make | tee build.log
+      test-app |& tee test.log
+`, two, 8, 0},
+		{"here-document data excluded", `  script:
+    - |
+      cat <<'EOF'
+      ignored | data
+      EOF
+      make | tee build.log
+      test-app | tee test.log
+`, two, 7, 0},
+		{"command substitution", `  script:
+    - |
+      LOWER="$(echo "$NAME" | tr '[:upper:]' '[:lower:]')"
+      DATA="$(curl -fsSL https://example.com/data | jq .)"
+      make | tee build.log
+`, two, 5, 0},
+		{"script sections combined", `  before_script:
+    - ./configure | tee configure.log
+  script:
+    - make | tee build.log
+  after_script:
+    - cleanup | tee cleanup.log
+`, three, 3, 7},
+		{"hooks and run steps", `  hooks:
+    pre_get_sources_script:
+      - prepare | tee prepare.log
+  run:
+    - name: build
+      script: make | tee build.log
+    - name: test
+      script: test-app | tee test.log
+`, three, 4, 9},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := findings024(t, "build:\n"+tc.sections)
+			if len(f) != 1 {
+				t.Fatalf("got %d findings, want one per job", len(f))
+			}
+			want := finding.Finding{
+				RuleID: "GL024", Severity: finding.Warn, Job: "build", Message: tc.message,
+				File: "test.yml", Line: tc.line, Col: tc.col,
+			}
+			if f[0] != want {
+				t.Errorf("got %+v, want %+v", f[0], want)
+			}
+		})
+	}
+}
+
+func TestGL024_SharedPipedLineCountsPerJob(t *testing.T) {
+	f := findings024(t, `first:
+  script: &commands
+    - make | tee build.log
+    - test-app | tee test.log
+second:
+  script: *commands
+third:
+  script:
+    - deploy | tee deploy.log
+`)
+	if len(f) != 3 {
+		t.Fatalf("got %d findings, want one for each of three jobs", len(f))
+	}
+	for i, job := range []string{"first", "second", "third"} {
+		if f[i].Job != job {
+			t.Errorf("finding %d is for %q, want %q", i, f[i].Job, job)
+		}
+		if got := strings.Contains(f[i].Message, "(2 piped lines in this job, first shown)"); got != (i < 2) {
+			t.Errorf("unexpected per-job count for %s: %s", job, f[i].Message)
+		}
+	}
+}

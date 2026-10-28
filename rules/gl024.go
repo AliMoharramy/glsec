@@ -4,6 +4,7 @@
 package rules
 
 import (
+	"fmt"
 	"regexp"
 	"strings"
 
@@ -29,7 +30,10 @@ func (r *gl024) Check(doc *yaml.Node, file string) []finding.Finding {
 	var findings []finding.Finding
 	inherit := NewInheritance(doc)
 	pipefail := nodeMemo[bool]{}
-	firstPipe := nodeMemo[int]{} // index of the item line, or -1
+	type pipedLines struct {
+		first, count int
+	}
+	pipes := nodeMemo[pipedLines]{}
 	hasPipefail := func(l *yaml.Node) bool {
 		return pipefail.get(l, func() bool { return pipefailRe.MatchString(l.Value) })
 	}
@@ -65,11 +69,14 @@ func (r *gl024) Check(doc *yaml.Node, file string) []finding.Finding {
 			}
 		}
 
-		// Find the first pipeline that needs pipefail. A | inside quotes, as
-		// in sed "s|a|b|" or grep "a|b", is part of an argument.
+		// Count lines with pipelines that need pipefail, retaining the first
+		// location. Multiple pipes on the same line count once.
+		var first *yaml.Node
+		var firstLine, count int
 		for _, l := range lines {
-			at := firstPipe.get(l, func() int {
-				pipelineLine := -1
+			pl := pipes.get(l, func() pipedLines {
+				var result pipedLines
+				pipelineLine, lastCountedLine := -1, -1
 				for _, cmd := range shellCommands(l.Value) {
 					if !cmd.piped {
 						pipelineLine = -1
@@ -78,29 +85,40 @@ func (r *gl024) Check(doc *yaml.Node, file string) []finding.Finding {
 					if pipelineLine < 0 {
 						pipelineLine = cmd.line
 					}
-					if !isSimplePrintCommand(cmd.text) {
-						return pipelineLine
+					if pipelineLine != lastCountedLine && !isSimplePrintCommand(cmd.text) {
+						if result.count == 0 {
+							result.first = pipelineLine
+						}
+						result.count++
+						lastCountedLine = pipelineLine
 					}
 				}
-				return -1
+				return result
 			})
-			if at < 0 {
-				continue
+			count += pl.count
+			if first == nil && pl.count > 0 {
+				first, firstLine = l, pl.first
 			}
-			f := finding.Finding{
-				RuleID:   "GL024",
-				Severity: finding.Warn,
-				Job:      name.Value,
-				Message:  "script uses a pipe without set -o pipefail — failures in all but the last command are silently ignored",
-				File:     file,
-				Line:     parser.ScalarContentLine(l, at),
-			}
-			if at == 0 {
-				f.Col = l.Column
-			}
-			findings = append(findings, f)
-			return // one finding per job
 		}
+		if count == 0 {
+			return
+		}
+		countHint := ""
+		if count > 1 {
+			countHint = fmt.Sprintf(" (%d piped lines in this job, first shown)", count)
+		}
+		f := finding.Finding{
+			RuleID:   "GL024",
+			Severity: finding.Warn,
+			Job:      name.Value,
+			Message:  "script uses a pipe without set -o pipefail" + countHint + " — failures in all but the last command are silently ignored",
+			File:     file,
+			Line:     parser.ScalarContentLine(first, firstLine),
+		}
+		if firstLine == 0 {
+			f.Col = first.Column
+		}
+		findings = append(findings, f) // one finding per job
 	})
 
 	return findings
