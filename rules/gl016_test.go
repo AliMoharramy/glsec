@@ -440,3 +440,64 @@ include:
 		t.Error("expected non-zero line number")
 	}
 }
+
+// curl and wget treat the URL scheme case-insensitively (RFC 3986), so
+// HTTP:// and Http:// still download over plain HTTP (#827).
+func TestGL016_ScriptUppercaseScheme_Warn(t *testing.T) {
+	for _, line := range []string{
+		"curl -fsSL HTTP://example.com/tool -o tool",
+		"wget Http://example.com/tool",
+	} {
+		f := findings016(t, "build:\n  script:\n    - "+line+"\n")
+		if len(f) != 1 {
+			t.Errorf("%q: expected 1 finding, got %d", line, len(f))
+			continue
+		}
+		if f[0].Severity != finding.Warn {
+			t.Errorf("%q: expected Warn severity, got %s", line, f[0].Severity)
+		}
+	}
+}
+
+// The host checks still apply with an uppercase scheme: loopback and trusted
+// hosts are skipped, and a private host is only Info.
+func TestGL016_ScriptUppercaseSchemeHosts(t *testing.T) {
+	f := findings016trusted(t, `
+build:
+  script:
+    - curl HTTP://localhost:8080/health
+    - curl HTTP://mirror.example.com/tool -o tool
+    - curl HTTP://10.0.0.5/tool -o tool
+`, []string{"mirror.example.com"})
+	if len(f) != 1 {
+		t.Fatalf("expected 1 finding (the private host), got %d", len(f))
+	}
+	if f[0].Severity != finding.Info {
+		t.Errorf("expected Info severity for a private host, got %s", f[0].Severity)
+	}
+}
+
+func TestGL016_ScriptUppercaseHTTPS_NoFinding(t *testing.T) {
+	f := findings016(t, `
+build:
+  script:
+    - curl -fsSL HTTPS://example.com/tool -o tool
+    - wget Https://example.com/tool
+`)
+	if len(f) != 0 {
+		t.Errorf("expected no finding for HTTPS://, got %d", len(f))
+	}
+}
+
+// git, unlike curl and wget, refuses an uppercase scheme ("git:
+// 'remote-HTTP' is not a git command"), so nothing is fetched over HTTP.
+func TestGL016_GitUppercaseScheme_NoFinding(t *testing.T) {
+	f := findings016(t, `
+build:
+  script:
+    - git clone HTTP://git.example.com/vendor/lib.git
+`)
+	if len(f) != 0 {
+		t.Errorf("expected no finding for git clone HTTP://, got %d", len(f))
+	}
+}

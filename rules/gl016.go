@@ -29,7 +29,7 @@ func (r *gl016) SetTrustedHosts(hosts []string) {
 
 var (
 	gitURLRe       = regexp.MustCompile(`\bgit://[^\s'"]+`)
-	curlWgetHTTPRe = regexp.MustCompile(`\b(?:curl|wget)\b[^|]*\bhttp://`)
+	curlWgetHTTPRe = regexp.MustCompile(`\b(?:curl|wget)\b[^|]*\b(?i:http)://`)
 	// git fetches remote content just like curl/wget, so the same HTTP check applies.
 	gitFetchHTTPRe = regexp.MustCompile(`\bgit\b[^|]*\b(?:clone|fetch|pull|remote\s+add|submodule\s+add)\b[^|]*\bhttp://`)
 	privateRanges  []*net.IPNet
@@ -237,9 +237,12 @@ func (r *gl016) scriptLineFinding(item *yaml.Node, file string) *finding.Finding
 		if !curlWgetHTTPRe.MatchString(cmd.text) && !gitFetchHTTPRe.MatchString(cmd.text) {
 			continue
 		}
+		// curl and wget accept the scheme in any case (HTTP://, Http://), so
+		// the match ignores case (#827). git refuses an uppercase scheme ("git:
+		// 'remote-HTTP' is not a git command"), so gitFetchHTTPRe does not.
 		var url string
 		for _, w := range shellWords(cmd.text) {
-			if strings.HasPrefix(w, "http://") {
+			if len(w) >= len("http://") && strings.EqualFold(w[:len("http://")], "http://") {
 				url = w
 				break
 			}
