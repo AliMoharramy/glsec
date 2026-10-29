@@ -217,6 +217,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 
 	rules.GL016.SetTrustedHosts(cfg.TrustedHosts)
+	rules.GL001.SetRequireImageDigest(cfg.RequireImageDigest)
 	rules.GL065.SetAllowedRegistries(cfg.AllowedRegistries)
 	rules.GL075.SetAllowedIncludeSources(cfg.AllowedIncludeSources)
 

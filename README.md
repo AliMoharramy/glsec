@@ -210,6 +210,10 @@ Use `--strict` to treat `warn` findings as hard failures (exit 1). Use `--no-exi
 strict: true        # warn findings cause exit 1
 no-exit-codes: true # never exit 1 (overrides strict)
 
+# Optional container-image policies (GL065 and GL001):
+allowed_registries: []       # empty permits any registry
+require_image_digest: false  # true also warns on version tags without a digest
+
 exclude_paths:
   - legacy/.gitlab-ci.yml
   - infra/old-pipelines/**
