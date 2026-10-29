@@ -239,13 +239,15 @@ func WriteJSON(w io.Writer, findings []finding.Finding, owasp, asvs func(string)
 }
 
 func writeJSON(w io.Writer, findings []finding.Finding, owasp, asvs func(string) []string) error {
+	cwd, _ := os.Getwd() // retain supplied absolute paths if cwd is unavailable
 	out := jsonOutput{Findings: make([]jsonFinding, 0, len(findings))}
 	for _, f := range findings {
+		file, _ := reportPath(f.File, cwd)
 		jf := jsonFinding{
 			Rule:     f.RuleID,
 			Severity: string(f.Severity),
 			Job:      f.Job,
-			File:     f.File,
+			File:     file,
 			Line:     f.Line,
 			Message:  f.Message,
 		}
@@ -423,7 +425,8 @@ type sarifPhysicalLocation struct {
 }
 
 type sarifArtifactLocation struct {
-	URI string `json:"uri"`
+	URI       string `json:"uri"`
+	URIBaseID string `json:"uriBaseId,omitempty"`
 }
 
 type sarifRegion struct {
@@ -480,15 +483,21 @@ func writeSARIF(w io.Writer, findings []finding.Finding, tool SARIFTool,
 	owasp func(string) []string, owaspName func(string) string,
 	asvs func(string) []string, asvsName func(string) string,
 ) error {
+	cwd, _ := os.Getwd()
 	results := make([]sarifResult, 0, len(findings))
 	for _, f := range findings {
+		file, local := reportPath(f.File, cwd)
+		location := sarifArtifactLocation{URI: file}
+		if local {
+			location.URIBaseID = "%SRCROOT%"
+		}
 		results = append(results, sarifResult{
 			RuleID:  f.RuleID,
 			Level:   severityToSARIFLevel(f.Severity),
 			Message: sarifMessage{Text: f.Message},
 			Locations: []sarifLocation{{
 				PhysicalLocation: sarifPhysicalLocation{
-					ArtifactLocation: sarifArtifactLocation{URI: f.File},
+					ArtifactLocation: location,
 					Region:           sarifRegion{StartLine: f.Line},
 				},
 			}},
@@ -687,8 +696,12 @@ func WriteCodeClimate(w io.Writer, findings []finding.Finding) error {
 }
 
 func writeCodeClimate(w io.Writer, findings []finding.Finding) error {
+	cwd, _ := os.Getwd()
 	out := make([]codeClimateIssue, 0, len(findings))
 	for _, f := range findings {
+		// Hash the reported path too, so absolute and relative invocations
+		// identify the same issue in the Code Quality widget.
+		f.File, _ = reportPath(f.File, cwd)
 		out = append(out, codeClimateIssue{
 			Type:        "issue",
 			CheckName:   f.RuleID,
@@ -742,12 +755,14 @@ type junitFailure struct {
 // Each finding becomes one failing test case; a clean run emits a single
 // passing case so the widget is not empty.
 func writeJUnit(w io.Writer, findings []finding.Finding) error {
+	cwd, _ := os.Getwd()
 	suite := junitTestsuite{Name: "glsec"}
 	if len(findings) == 0 {
 		suite.Tests = 1
 		suite.Cases = []junitTestcase{{Name: "glsec: no findings", Classname: "glsec"}}
 	} else {
 		for _, f := range findings {
+			f.File, _ = reportPath(f.File, cwd)
 			loc := f.File
 			if f.Line > 0 {
 				loc = fmt.Sprintf("%s:%d", f.File, f.Line)

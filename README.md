@@ -196,6 +196,8 @@ glsec --new-only .gitlab-ci.yml                       # diff against .glsec-igno
 glsec --new-only --baseline main.json .gitlab-ci.yml  # diff against a saved JSON snapshot
 ```
 
+JSON, SARIF, Code Quality and JUnit reports write absolute file paths inside the working directory as relative paths, using `/` separators. Paths outside that directory retain their supplied spelling. SARIF marks locations inside the working directory with `uriBaseId: "%SRCROOT%"` so code scanning can resolve them against the source root. This avoids publishing runner directory names for files inside the checkout.
+
 ### Exit codes
 
 | Code | Meaning |
