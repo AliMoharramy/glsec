@@ -43,7 +43,7 @@ Mutable references that allow silent substitution of images, templates, or packa
 
 | ID | Severity | Description |
 |----|----------|-------------|
-| [GL001](rules/GL001.md) | `error`/`warn` | Mutable image tag (`latest`, no tag, non-digest pin); version-less variant tags such as `docker:dind` as `warn` |
+| [GL001](rules/GL001.md) | `error`/`warn` | Mutable image tag (`latest`, no tag); version-less variants as `warn`; optionally require image digests with `require_image_digest` |
 | [GL003](rules/GL003.md) | `error` | Remote `include:` with mutable or missing `ref` |
 | [GL011](rules/GL011.md) | `error` | Download-and-execute pattern in script (`curl \| bash`, `wget \| sh`) |
 | [GL016](rules/GL016.md) | varies  | Insecure transport — HTTP or `git://` (`include:remote`, scripts, variables) |

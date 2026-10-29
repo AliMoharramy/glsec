@@ -71,6 +71,9 @@ type Config struct {
 	// host/namespace prefixes). When non-empty, GL065 flags any image/service
 	// from a registry not on the list. Empty disables the check.
 	AllowedRegistries []string `yaml:"allowed_registries"`
+	// RequireImageDigest makes GL001 warn on literal version tags without a
+	// SHA256 digest. Off by default; version tags remain accepted otherwise.
+	RequireImageDigest bool `yaml:"require_image_digest"`
 	// AllowedIncludeSources is an opt-in allowlist of include sources (project
 	// namespaces, component hosts/paths, or remote hosts). When non-empty, GL075
 	// flags any include:project / include:component / include:remote whose source
@@ -172,6 +175,7 @@ var allowedTopLevelKeys = map[string]bool{
 	"gitlab-version":          true,
 	"trusted-hosts":           true,
 	"allowed_registries":      true,
+	"require_image_digest":    true,
 	"allowed_include_sources": true,
 	"strict":                  true,
 	"no-exit-codes":           true,
