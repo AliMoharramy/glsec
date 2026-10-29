@@ -13,11 +13,19 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-type gl001 struct{}
+type gl001 struct {
+	requireImageDigest bool
+}
 
 var GL001 = &gl001{}
 
 func (r *gl001) ID() string { return "GL001" }
+
+// SetRequireImageDigest enables the opt-in digest policy. The zero value keeps
+// the default behavior, which accepts version tags.
+func (r *gl001) SetRequireImageDigest(required bool) {
+	r.requireImageDigest = required
+}
 
 func (r *gl001) Check(doc *yaml.Node, file string) []finding.Finding {
 	var findings []finding.Finding
@@ -29,21 +37,21 @@ func (r *gl001) Check(doc *yaml.Node, file string) []finding.Finding {
 		return append(ruleVarValues(workflow, name), varValues(globalVars, name)...)
 	}
 
-	findings = append(findings, checkImageNode(parser.FindKey(mapping, "image"), file, resolveGlobal)...)
-	findings = append(findings, checkServicesNode(parser.FindKey(mapping, "services"), file, resolveGlobal)...)
+	findings = append(findings, r.checkImageNode(parser.FindKey(mapping, "image"), file, resolveGlobal)...)
+	findings = append(findings, r.checkServicesNode(parser.FindKey(mapping, "services"), file, resolveGlobal)...)
 
 	if def := parser.FindKey(mapping, "default"); def != nil {
-		findings = append(findings, checkImageNode(parser.FindKey(def, "image"), file, resolveGlobal)...)
-		findings = append(findings, checkServicesNode(parser.FindKey(def, "services"), file, resolveGlobal)...)
+		findings = append(findings, r.checkImageNode(parser.FindKey(def, "image"), file, resolveGlobal)...)
+		findings = append(findings, r.checkServicesNode(parser.FindKey(def, "services"), file, resolveGlobal)...)
 	}
 
 	parser.EachJob(doc, func(name *yaml.Node, job *yaml.Node) {
 		resolve := jobVarResolver(name.Value, job, resolveGlobal)
-		for _, f := range checkImageNode(parser.FindKey(job, "image"), file, resolve) {
+		for _, f := range r.checkImageNode(parser.FindKey(job, "image"), file, resolve) {
 			f.Job = name.Value
 			findings = append(findings, f)
 		}
-		for _, f := range checkServicesNode(parser.FindKey(job, "services"), file, resolve) {
+		for _, f := range r.checkServicesNode(parser.FindKey(job, "services"), file, resolve) {
 			f.Job = name.Value
 			findings = append(findings, f)
 		}
@@ -75,7 +83,7 @@ var mutableTags = map[string]bool{
 // nil when the file does not define it.
 type varResolver func(name string) []string
 
-func checkImageNode(node *yaml.Node, file string, resolve varResolver) []finding.Finding {
+func (r *gl001) checkImageNode(node *yaml.Node, file string, resolve varResolver) []finding.Finding {
 	if node == nil {
 		return nil
 	}
@@ -83,10 +91,10 @@ func checkImageNode(node *yaml.Node, file string, resolve varResolver) []finding
 	if ref == "" {
 		return nil
 	}
-	return checkRefResolved(ref, line, col, file, resolve)
+	return r.checkRefResolved(ref, line, col, file, resolve)
 }
 
-func checkServicesNode(node *yaml.Node, file string, resolve varResolver) []finding.Finding {
+func (r *gl001) checkServicesNode(node *yaml.Node, file string, resolve varResolver) []finding.Finding {
 	if node == nil || node.Kind != yaml.SequenceNode {
 		return nil
 	}
@@ -96,14 +104,14 @@ func checkServicesNode(node *yaml.Node, file string, resolve varResolver) []find
 		if ref == "" {
 			continue
 		}
-		findings = append(findings, checkRefResolved(ref, line, col, file, resolve)...)
+		findings = append(findings, r.checkRefResolved(ref, line, col, file, resolve)...)
 	}
 	return findings
 }
 
 // checkRefResolved checks ref directly, or, when ref is a bare variable,
 // each value the file assigns to that variable.
-func checkRefResolved(ref string, line, col int, file string, resolve varResolver) []finding.Finding {
+func (r *gl001) checkRefResolved(ref string, line, col int, file string, resolve varResolver) []finding.Finding {
 	name := ""
 	switch {
 	case isVarRef(ref):
@@ -111,7 +119,7 @@ func checkRefResolved(ref string, line, col int, file string, resolve varResolve
 	case jobInputRefRe.MatchString(ref):
 		name = jobInputPrefix + jobInputRefRe.FindStringSubmatch(ref)[1]
 	default:
-		return checkRef(ref, fmt.Sprintf("%q", ref), line, col, file)
+		return checkRef(ref, fmt.Sprintf("%q", ref), line, col, file, r.requireImageDigest)
 	}
 	var findings []finding.Finding
 	seen := map[string]bool{}
@@ -121,7 +129,7 @@ func checkRefResolved(ref string, line, col int, file string, resolve varResolve
 			continue
 		}
 		seen[v] = true
-		findings = append(findings, checkRef(v, fmt.Sprintf("%q (= %q)", ref, v), line, col, file)...)
+		findings = append(findings, checkRef(v, fmt.Sprintf("%q (= %q)", ref, v), line, col, file, false)...)
 	}
 	return findings
 }
@@ -315,7 +323,7 @@ func isVarRef(ref string) bool {
 var gitlabMacOSImage = regexp.MustCompile(`^macos-[0-9]+-xcode-[0-9]+$`)
 
 // checkRef checks ref; label names the image in the message.
-func checkRef(ref, label string, line, col int, file string) []finding.Finding {
+func checkRef(ref, label string, line, col int, file string, requireDigest bool) []finding.Finding {
 	if strings.Contains(ref, "@sha256:") {
 		return nil
 	}
@@ -335,6 +343,17 @@ func checkRef(ref, label string, line, col int, file string) []finding.Finding {
 			Severity: finding.Error,
 			Message:  fmt.Sprintf("image %s has no tag — defaults to latest (mutable)", label),
 			File:     file, Line: line, Col: col,
+		}}
+	}
+	if requireDigest && !strings.Contains(ref, "$") {
+		severity := finding.Warn
+		if mutableTags[tag] {
+			severity = finding.Error
+		}
+		return []finding.Finding{{
+			RuleID: "GL001", Severity: severity,
+			Message: fmt.Sprintf("image %s uses tag %q, which can be moved — require_image_digest is enabled; pin to image@sha256:…", label, tag),
+			File:    file, Line: line, Col: col,
 		}}
 	}
 	if mutableTags[tag] {

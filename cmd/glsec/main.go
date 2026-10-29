@@ -4,6 +4,7 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -11,8 +12,10 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"runtime/debug"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -90,6 +93,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	baselineFlag := flags.String("baseline", "", "path to a baseline to diff against in --new-only mode: a glsec JSON snapshot (--format json) or a .glsec-ignore file (implies --new-only)")
 	requireReasonFlag := flags.Bool("require-ignore-reason", false, "treat an inline # glsec:ignore without a \"-- reason\" as a policy violation (exit 2)")
 	noCacheFlag := flags.Bool("no-cache", false, "disable result cache for this run")
+	cacheFlag := flags.Bool("cache", false, "use the result cache in CI (CI=true), where it is off by default; --no-cache wins")
 	clearCacheFlag := flags.Bool("clear-cache", false, "remove all cached results and exit")
 	noColorFlag := flags.Bool("no-color", false, "disable colored output")
 	shellcheckPathFlag := flags.String("shellcheck-path", "", "path to the ShellCheck binary (default: shellcheck from PATH)")
@@ -207,16 +211,28 @@ func run(args []string, stdout, stderr io.Writer) int {
 		cfg.ShellCheck.Path = *shellcheckPathFlag
 	}
 
+	// A typo in --skip leaves the rule running; a typo in --only drops a
+	// rule the user asked for and, alone, turns the scan off with exit 0 (#900).
 	if len(onlyArgs) > 0 {
 		cfg.Only = ruleIDSet(onlyArgs)
-		warnUnknownRuleIDs(stderr, "--only", cfg.Only)
+		if unknown := unknownRuleIDs(cfg.Only); len(unknown) > 0 {
+			_, _ = fmt.Fprintf(stderr, "error: --only: unknown rule ID %s\n", strings.Join(unknown, ", "))
+			return 2
+		}
 	}
 	if len(skipArgs) > 0 {
 		cfg.Skip = ruleIDSet(skipArgs)
-		warnUnknownRuleIDs(stderr, "--skip", cfg.Skip)
+		for _, id := range unknownRuleIDs(cfg.Skip) {
+			_, _ = fmt.Fprintf(stderr, "warning: --skip: unknown rule ID %s\n", id)
+		}
+	}
+	if len(cfg.Only) > 0 && !anyRuleSelected(cfg) {
+		_, _ = fmt.Fprintf(stderr, "error: --only and --skip together leave no rule to run\n")
+		return 2
 	}
 
 	rules.GL016.SetTrustedHosts(cfg.TrustedHosts)
+	rules.GL001.SetRequireImageDigest(cfg.RequireImageDigest)
 	rules.GL065.SetAllowedRegistries(cfg.AllowedRegistries)
 	rules.GL075.SetAllowedIncludeSources(cfg.AllowedIncludeSources)
 
@@ -252,6 +268,12 @@ func run(args []string, stdout, stderr io.Writer) int {
 	// it and silently drop the per-suppression messages. Opt-in policy, so paying
 	// with a cold scan is the right trade.
 	useCache := !*noCacheFlag && !*generateIgnoreFlag && !*noIgnoresFlag && !newOnly && !cfg.RequireIgnoreReason
+	// A CI job starts fresh, so the cache only helps if the project persists
+	// it between pipelines, which costs more than the scan and shares a file
+	// that decides what glsec reports (#898).
+	if os.Getenv("CI") == "true" && !*cacheFlag {
+		useCache = false
+	}
 
 	scanOpts := scanOptions{
 		stderr:         stderr,
@@ -263,6 +285,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		skip:           skipArgs,
 		useCache:       useCache,
 		generateIgnore: *generateIgnoreFlag,
+		scannedFiles:   map[string]bool{},
 		noIgnores:      *noIgnoresFlag,
 		newOnly:        newOnly,
 	}
@@ -299,11 +322,16 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 
 	if *generateIgnoreFlag {
-		if err := writeIgnoreFile(suppress.IgnoreFile, allFindings); err != nil {
+		ruleDidRun := func(id string) bool { return ruleRan(cfg, gitlabVersion, id) }
+		written, kept, err := writeIgnoreFile(suppress.IgnoreFile, allFindings, scanOpts.scannedFiles, ruleDidRun)
+		if err != nil {
 			_, _ = fmt.Fprintf(stderr, "error: --generate-ignore: %v\n", err)
 			return 2
 		}
-		_, _ = fmt.Fprintf(stderr, "wrote %d suppression(s) to %s\n", len(allFindings), suppress.IgnoreFile)
+		_, _ = fmt.Fprintf(stderr, "wrote %d suppression(s) to %s\n", written, suppress.IgnoreFile)
+		if kept > 0 {
+			_, _ = fmt.Fprintf(stderr, "kept %d other suppression(s) for rules or files this run didn't scan\n", kept)
+		}
 		return 0
 	}
 
@@ -340,8 +368,11 @@ type scanOptions struct {
 	skip           []string
 	useCache       bool
 	generateIgnore bool
-	noIgnores      bool
-	newOnly        bool
+	// scannedFiles collects every pipeline file scanned, child pipelines
+	// included, for --generate-ignore; nil otherwise.
+	scannedFiles map[string]bool
+	noIgnores    bool
+	newOnly      bool
 }
 
 // scanRoot parses one root pipeline file (and its child pipelines), runs the
@@ -377,6 +408,11 @@ func scanRoot(file string, opt scanOptions) (findings []finding.Finding, jobCoun
 	// GitLab resolves trigger:include paths from the repository root, taken
 	// here as the directory of the pipeline being scanned.
 	allDocs := collectDocuments(opt.stderr, doc, filepath.Dir(file), opt.cfg.ExcludePaths, seen)
+	if opt.scannedFiles != nil {
+		for _, d := range allDocs {
+			opt.scannedFiles[d.File] = true
+		}
+	}
 
 	jobCount = parser.CountJobs(doc.Root)
 	for _, d := range allDocs[1:] {
@@ -494,18 +530,33 @@ func ruleIDSet(ids []string) map[string]bool {
 	return set
 }
 
-// warnUnknownRuleIDs prints a stderr warning for any ID in set that is not a
-// known rule, so typos (e.g. --only GL01) do not silently match nothing.
-func warnUnknownRuleIDs(w io.Writer, flagName string, set map[string]bool) {
+// unknownRuleIDs returns the IDs in set that name neither a glsec rule nor a
+// ShellCheck check (SCnnnn), quoted and sorted.
+func unknownRuleIDs(set map[string]bool) []string {
 	known := make(map[string]bool, len(rules.All()))
 	for _, r := range rules.All() {
 		known[r.ID()] = true
 	}
+	var out []string
 	for id := range set {
-		if !known[id] {
-			_, _ = fmt.Fprintf(w, "warning: %s: unknown rule ID %q\n", flagName, id)
+		if !known[id] && !shellCheckIDRe.MatchString(id) {
+			out = append(out, strconv.Quote(id))
 		}
 	}
+	sort.Strings(out)
+	return out
+}
+
+var shellCheckIDRe = regexp.MustCompile(`^SC[0-9]{4}$`)
+
+// anyRuleSelected reports whether --only and --skip leave a rule to run.
+func anyRuleSelected(cfg *config.Config) bool {
+	for id := range cfg.Only {
+		if !cfg.Skip[id] {
+			return true
+		}
+	}
+	return false
 }
 
 // resolveTargets turns the positional arguments into a list of pipeline files
@@ -843,12 +894,66 @@ func filterNewOnly(w io.Writer, findings []finding.Finding, baselinePath string)
 	return newFindings, nil
 }
 
-// writeIgnoreFile creates or overwrites .glsec-ignore with one entry per finding.
-func writeIgnoreFile(path string, findings []finding.Finding) error {
-	lines := []string{"# Generated by glsec --generate-ignore"}
+// ruleRan reports whether rule id ran in this scan: selected by --only,
+// --skip and the config, inside the OWASP filter, and available for the
+// GitLab version. ShellCheck findings (SCnnnn) run only when ShellCheck is on.
+func ruleRan(cfg *config.Config, gitlabVersion gitlabver.Version, id string) bool {
+	if !cfg.RuleEnabled(id) {
+		return false
+	}
+	if strings.HasPrefix(id, "SC") {
+		return cfg.ShellCheck.Enabled
+	}
+	return cfg.OWASPEnabled(rules.OWASPCategories(id)) && rules.EnabledFor(id, gitlabVersion)
+}
+
+// writeIgnoreFile writes the findings to .glsec-ignore as a baseline. An
+// existing entry is replaced only when this run could have reported it: its
+// file was scanned and its rule ran. Entries for other files or for rules
+// left out with --only, --skip or the config are kept, as are comments, and
+// a finding that already had an entry keeps that line, with its exp: date
+// (#902). It returns the number of entries written for findings and kept.
+func writeIgnoreFile(path string, findings []finding.Finding, scanned map[string]bool, ruleDidRun func(string) bool) (written, kept int, err error) {
+	old, err := os.ReadFile(path) //nolint:gosec // G304: the fixed name .glsec-ignore in the working directory
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return 0, 0, err
+	}
+	lines := []string{ignoreFileHeader}
+	previous := map[string]string{} // "file:line rule" -> its line
+	for _, line := range strings.Split(strings.ReplaceAll(string(old), "\r\n", "\n"), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || trimmed == ignoreFileHeader {
+			continue
+		}
+		fields := strings.Fields(trimmed)
+		colon := strings.LastIndex(fields[0], ":")
+		if strings.HasPrefix(trimmed, "#") || len(fields) < 2 || colon < 0 {
+			lines = append(lines, line) // a comment or a line glsec can't read: not ours to drop
+			continue
+		}
+		if scanned[fields[0][:colon]] && ruleDidRun(fields[1]) {
+			previous[fields[0]+" "+fields[1]] = trimmed
+			continue
+		}
+		lines = append(lines, trimmed)
+		kept++
+	}
+	done := map[string]bool{}
 	for _, f := range findings {
-		lines = append(lines, fmt.Sprintf("%s:%d %s", f.File, f.Line, f.RuleID))
+		key := fmt.Sprintf("%s:%d %s", f.File, f.Line, f.RuleID)
+		if done[key] {
+			continue
+		}
+		done[key] = true
+		line := key
+		if p, ok := previous[key]; ok {
+			line = p
+		}
+		lines = append(lines, line)
+		written++
 	}
 	content := strings.Join(lines, "\n") + "\n"
-	return os.WriteFile(path, []byte(content), 0600) //nolint:gosec
+	return written, kept, os.WriteFile(path, []byte(content), 0600) //nolint:gosec
 }
+
+const ignoreFileHeader = "# Generated by glsec --generate-ignore"

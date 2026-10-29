@@ -31,6 +31,29 @@ func TestDefault(t *testing.T) {
 	}
 }
 
+func TestRequireImageDigest(t *testing.T) {
+	if Default().RequireImageDigest {
+		t.Fatal("digest policy must be opt-in")
+	}
+	for _, tc := range []struct {
+		src  string
+		want bool
+	}{
+		{"require_image_digest: true", true},
+		{"require_image_digest: false", false},
+		{"{}", false},
+	} {
+		if got := parseStr(t, tc.src).RequireImageDigest; got != tc.want {
+			t.Errorf("%s: got %v, want %v", tc.src, got, tc.want)
+		}
+	}
+	for _, src := range []string{"require_image_digest: not-a-bool", "require_image_digest: [true]"} {
+		if _, err := parse([]byte(src), "test.yml"); err == nil {
+			t.Errorf("accepted invalid boolean: %s", src)
+		}
+	}
+}
+
 func TestLoad_MissingDefaultFile(t *testing.T) {
 	dir := t.TempDir()
 	orig, _ := os.Getwd()

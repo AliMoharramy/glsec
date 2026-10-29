@@ -165,10 +165,10 @@ glsec --no-color .gitlab-ci.yml
 # exclude a file or directory from scanning
 glsec --exclude vendor/ .gitlab-ci.yml
 
-# run only specific rules (comma-separated or repeated)
+# run only specific rules (comma-separated or repeated); an unknown rule ID is an error
 glsec --only GL001,GL003 .gitlab-ci.yml
 
-# skip specific rules
+# skip specific rules; an unknown rule ID only warns
 glsec --skip GL008,GL022 .gitlab-ci.yml
 
 # CycloneDX BOM of the images and includes the pipeline pulls in (see Pipeline inventory)
@@ -198,19 +198,25 @@ glsec --new-only --baseline main.json .gitlab-ci.yml  # diff against a saved JSO
 
 JSON, SARIF, Code Quality, JUnit and GitLab SAST reports write absolute file paths inside the working directory as relative paths, using `/` separators. Paths outside that directory retain their supplied spelling. SARIF marks locations inside the working directory with `uriBaseId: "%SRCROOT%"` so code scanning can resolve them against the source root. This avoids publishing runner directory names for files inside the checkout.
 
+`--generate-ignore` rewrites only the entries the run could have reported: those for a file it scanned and a rule that ran. Entries for other pipeline files, and for rules left out with `--only`, `--skip` or `.glsec.yml`, stay as they are, and so do comments and an entry's `exp:` date when the finding is still there. `glsec --generate-ignore --only GL001 .gitlab-ci.yml` refreshes the GL001 entries and keeps the rest.
+
 ### Exit codes
 
 | Code | Meaning |
 |------|---------|
 | 0 | No `error`-severity findings (warn-only findings exit 0 by default) |
 | 1 | One or more `error` findings; or any finding when `--strict` is set |
-| 2 | Usage error, file could not be parsed, a suppression policy violation, or with `--strict`, every file excluded |
+| 2 | Usage error (including an unknown rule ID in `--only`, or `--only` and `--skip` that leave no rule), file could not be parsed, a suppression policy violation, or with `--strict`, every file excluded |
 
 Use `--strict` to treat `warn` findings as hard failures (exit 1). Use `--no-exit-codes` to always exit 0 regardless of findings (advisory/informational mode). All flags can also be set in `.glsec.yml`:
 
 ```yaml
 strict: true        # warn findings cause exit 1
 no-exit-codes: true # never exit 1 (overrides strict)
+
+# Optional container-image policies (GL065 and GL001):
+allowed_registries: []       # empty permits any registry
+require_image_digest: false  # true also warns on version tags without a digest
 
 exclude_paths:
   - legacy/.gitlab-ci.yml
@@ -300,6 +306,8 @@ With the GitLab component, set the inputs `no_repo_config: true` and `no_ignores
 ### Result cache
 
 glsec caches results in `$XDG_CACHE_HOME/glsec` (`~/.cache/glsec` by default), keyed on the glsec version, the date, the scanned files, the config and the suppressions, so an unchanged pipeline is not scanned twice on the same day. `--no-cache` skips it for one run; `--clear-cache` empties it.
+
+In CI (`CI=true`) glsec doesn't use the cache: a job starts in a fresh container, so the cache would only help if the project kept it between pipelines with `cache:`, which takes longer than the scan and shares a file that decides what glsec reports. `--cache` turns it on for such a run anyway; `--no-cache` wins over it.
 
 A cached result decides what glsec reports, so glsec only uses a cache directory that belongs to the current user and that nobody else can write to, reads only regular files from it, and never uses a cache that lies inside the directory of the pipeline being scanned (as with `XDG_CACHE_HOME=$CI_PROJECT_DIR/.cache`), where the repository could ship entries of its own.
 
