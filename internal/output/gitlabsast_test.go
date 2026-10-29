@@ -169,6 +169,38 @@ func TestWriteGitLabSAST_Empty(t *testing.T) {
 	}
 }
 
+func TestWriteGitLabSAST_RelativePathsKeepStableIDsAndSanitization(t *testing.T) {
+	t.Chdir(t.TempDir())
+	const relative = "ci/file\u202e.yml"
+	abs, err := filepath.Abs(relative)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ids []string
+	for _, file := range []string{relative, abs} {
+		findings := []finding.Finding{{RuleID: "GL001", Severity: finding.Warn, File: file, Line: 7, Job: "build", Message: "mutable image"}}
+		var buf bytes.Buffer
+		if err := WriteGitLabSAST(&buf, findings, GitLabSASTMeta{}); err != nil {
+			t.Fatal(err)
+		}
+		var out gitlabSASTReport
+		if err := json.Unmarshal(buf.Bytes(), &out); err != nil {
+			t.Fatal(err)
+		}
+		v := out.Vulnerabilities[0]
+		if v.Location.File != `ci/file\u202e.yml` || v.Location.StartLine != 7 {
+			t.Errorf("location = %+v, want sanitized relative path at line 7", v.Location)
+		}
+		if findings[0].File != file {
+			t.Error("writer mutated the original finding")
+		}
+		ids = append(ids, v.ID)
+	}
+	if ids[0] != ids[1] {
+		t.Errorf("relative and absolute invocations produced different SAST IDs: %v", ids)
+	}
+}
+
 func TestWrite_GitLabSAST(t *testing.T) {
 	if f, ok := ParseFormat("gitlab-sast"); !ok || f != FormatGitLabSAST {
 		t.Fatalf("ParseFormat(gitlab-sast) = %q, %v", f, ok)

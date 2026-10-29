@@ -33,7 +33,7 @@ func TestReportPaths(t *testing.T) {
 		{"sibling prefix", filepath.Join(root, "repo-other", "build.yml"), filepath.Join(root, "repo-other", "build.yml"), false},
 		{"relative outside", "../outside.yml", "../outside.yml", false},
 	} {
-		for _, format := range []Format{FormatJSON, FormatSARIF, FormatCodeClimate, FormatJUnit} {
+		for _, format := range []Format{FormatJSON, FormatSARIF, FormatCodeClimate, FormatJUnit, FormatGitLabSAST} {
 			t.Run(tc.name+"/"+string(format), func(t *testing.T) {
 				fs := []finding.Finding{{RuleID: "GL001", Severity: finding.Warn, File: tc.file, Line: 7, Message: "mutable image"}}
 				var buf bytes.Buffer
@@ -64,6 +64,12 @@ func TestReportPaths(t *testing.T) {
 						t.Fatal(err)
 					}
 					got = out[0].Location.Path
+				case FormatGitLabSAST:
+					var out gitlabSASTReport
+					if err := json.Unmarshal(buf.Bytes(), &out); err != nil {
+						t.Fatal(err)
+					}
+					got = out.Vulnerabilities[0].Location.File
 				case FormatJUnit:
 					var out junitTestsuites
 					if err := xml.Unmarshal(buf.Bytes(), &out); err != nil {
