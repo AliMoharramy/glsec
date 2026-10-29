@@ -4,12 +4,40 @@
 package baseline
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/glsec/glsec/internal/finding"
 )
+
+func TestJSONSnapshot_AbsoluteAndRelativePathsMatch(t *testing.T) {
+	t.Chdir(t.TempDir())
+	abs, err := filepath.Abs(".gitlab-ci.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct{ saved, current string }{
+		{abs, ".gitlab-ci.yml"}, // snapshots written before #835
+		{".gitlab-ci.yml", abs}, // relative reports with absolute CLI arguments
+	} {
+		data, err := json.Marshal(map[string]any{"findings": []map[string]string{{"rule": "GL001", "file": tc.saved, "message": "mutable image"}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, err := Load(write(t, string(data)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !b.IsNew(finding.Finding{RuleID: "GL001", File: "other.yml", Message: "mutable image"}) {
+			t.Error("a different file matched the snapshot")
+		}
+		if b.IsNew(finding.Finding{RuleID: "GL001", File: tc.current, Message: "mutable image"}) {
+			t.Errorf("snapshot path %q did not match %q", tc.saved, tc.current)
+		}
+	}
+}
 
 func write(t *testing.T, content string) string {
 	t.Helper()

@@ -12,6 +12,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/glsec/glsec/internal/finding"
@@ -65,7 +66,7 @@ func loadJSON(data []byte) (*Baseline, error) {
 	}
 	b := &Baseline{counts: make(map[string]int), useMessage: true}
 	for _, f := range snap.Findings {
-		b.counts[key(f.Rule, f.File, f.Message)]++
+		b.counts[snapshotKey(f.Rule, f.File, f.Message)]++
 	}
 	return b, nil
 }
@@ -98,15 +99,24 @@ func key(rule, file, message string) string {
 	return rule + "\x00" + file + "\x00" + message
 }
 
+// JSON reports use working-directory-relative paths. Resolve both snapshots
+// and current findings against cwd so absolute CLI arguments still match, as
+// do snapshots saved before report paths became relative.
+func snapshotKey(rule, file, message string) string {
+	if abs, err := filepath.Abs(file); err == nil {
+		file = abs
+	}
+	return key(rule, file, message)
+}
+
 // IsNew reports whether f is absent from the baseline. When f matches a baseline
 // entry, one occurrence is consumed so that callers iterating over the current
 // findings account for duplicates by count.
 func (b *Baseline) IsNew(f finding.Finding) bool {
-	msg := ""
+	k := key(f.RuleID, f.File, "")
 	if b.useMessage {
-		msg = f.Message
+		k = snapshotKey(f.RuleID, f.File, f.Message)
 	}
-	k := key(f.RuleID, f.File, msg)
 	if b.counts[k] > 0 {
 		b.counts[k]--
 		return false

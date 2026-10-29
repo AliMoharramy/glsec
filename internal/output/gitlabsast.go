@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 	"time"
 
@@ -111,6 +112,7 @@ func gitlabSASTID(f finding.Finding) string {
 
 // WriteGitLabSAST writes findings as a GitLab SAST report.
 func WriteGitLabSAST(w io.Writer, findings []finding.Finding, meta GitLabSASTMeta) error {
+	cwd, _ := os.Getwd()
 	version := meta.Version
 	if version == "" {
 		version = "dev"
@@ -126,6 +128,8 @@ func WriteGitLabSAST(w io.Writer, findings []finding.Finding, meta GitLabSASTMet
 		Vulnerabilities: make([]gitlabSASTFinding, 0, len(findings)),
 	}
 	for _, f := range findings {
+		// Use the reported path for both the location and its stable ID.
+		f.File, _ = reportPath(f.File, cwd)
 		report.Vulnerabilities = append(report.Vulnerabilities, gitlabSASTVuln(f, meta))
 	}
 	var buf bytes.Buffer
