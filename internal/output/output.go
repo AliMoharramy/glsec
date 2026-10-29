@@ -596,9 +596,12 @@ func writeSARIF(w io.Writer, findings []finding.Finding, tool SARIFTool,
 		Version: "2.1.0",
 		Runs:    []sarifRun{run},
 	}
-	enc := json.NewEncoder(w)
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
 	enc.SetIndent("", "  ")
-	return enc.Encode(log)
+	_ = enc.Encode(log) // a bytes.Buffer never fails and sarifLog always marshals
+	_, err := io.WriteString(w, escapeBidiJSON(buf.String()))
+	return err
 }
 
 // describeSARIFRule fills in what code scanning shows for a rule: the title,
@@ -699,9 +702,12 @@ func writeCodeClimate(w io.Writer, findings []finding.Finding) error {
 			},
 		})
 	}
-	enc := json.NewEncoder(w)
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
 	enc.SetIndent("", "  ")
-	return enc.Encode(out)
+	_ = enc.Encode(out) // a bytes.Buffer never fails and codeClimateIssue always marshals
+	_, err := io.WriteString(w, escapeBidiJSON(buf.String()))
+	return err
 }
 
 type junitTestsuites struct {

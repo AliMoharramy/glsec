@@ -4,6 +4,7 @@
 package output
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
@@ -127,9 +128,12 @@ func WriteGitLabSAST(w io.Writer, findings []finding.Finding, meta GitLabSASTMet
 	for _, f := range findings {
 		report.Vulnerabilities = append(report.Vulnerabilities, gitlabSASTVuln(f, meta))
 	}
-	enc := json.NewEncoder(w)
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
 	enc.SetIndent("", "  ")
-	return enc.Encode(report)
+	_ = enc.Encode(report) // a bytes.Buffer never fails and the report always marshals
+	_, err := io.WriteString(w, escapeBidiJSON(buf.String()))
+	return err
 }
 
 func gitlabSASTVuln(f finding.Finding, meta GitLabSASTMeta) gitlabSASTFinding {
@@ -142,7 +146,8 @@ func gitlabSASTVuln(f finding.Finding, meta GitLabSASTMeta) gitlabSASTFinding {
 	}
 	// The message, job and path come from the scanned file; GitLab shows
 	// them in its UI, so control and bidi characters are escaped as in the
-	// terminal output.
+	// terminal output. GitLab decodes the JSON before rendering, so escaping
+	// the report bytes alone would still show the raw characters.
 	description := Sanitize(f.Message)
 	if f.Job != "" {
 		description += " (job: " + Sanitize(f.Job) + ")"

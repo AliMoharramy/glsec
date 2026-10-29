@@ -201,6 +201,57 @@ func TestWriteJSON_BidiCharactersEscaped(t *testing.T) {
 	}
 }
 
+func TestWriteSARIF_BidiCharactersEscaped(t *testing.T) {
+	file := "\u2066file.yml"
+	msg := "a\u202eb\u202cc\u2066d\u200ee\u061cf"
+	var buf bytes.Buffer
+	findings := []finding.Finding{
+		{RuleID: "GL001", Severity: finding.Error, Job: "job\u202etset", File: file, Line: 1, Message: msg},
+	}
+	if err := Write(&buf, FormatSARIF, findings, 0, false, false); err != nil {
+		t.Fatal(err)
+	}
+	raw := buf.String()
+	for _, r := range []rune{'\u202a', '\u202b', '\u202c', '\u202d', '\u202e', '\u2066', '\u2067', '\u2068', '\u2069', '\u200e', '\u200f', '\u061c'} {
+		if strings.ContainsRune(raw, r) {
+			t.Errorf("raw SARIF output contains bidi rune U+%04X", r)
+		}
+	}
+	var log sarifLog
+	if err := json.Unmarshal(buf.Bytes(), &log); err != nil {
+		t.Fatalf("invalid SARIF JSON: %v", err)
+	}
+	result := log.Runs[0].Results[0]
+	if result.Message.Text != msg || result.Locations[0].PhysicalLocation.ArtifactLocation.URI != file {
+		t.Errorf("round trip changed values: got message=%q file=%q", result.Message.Text, result.Locations[0].PhysicalLocation.ArtifactLocation.URI)
+	}
+}
+
+func TestWriteCodeClimate_BidiCharactersEscaped(t *testing.T) {
+	file := "\u2066file.yml"
+	msg := "a\u202eb\u2066c\u200ed\u061ce"
+	var buf bytes.Buffer
+	findings := []finding.Finding{
+		{RuleID: "GL001", Severity: finding.Error, Job: "job\u202etset", File: file, Line: 1, Message: msg},
+	}
+	if err := Write(&buf, FormatCodeClimate, findings, 0, false, false); err != nil {
+		t.Fatal(err)
+	}
+	raw := buf.String()
+	for _, r := range []rune{'\u202a', '\u202b', '\u202c', '\u202d', '\u202e', '\u2066', '\u2067', '\u2068', '\u2069', '\u200e', '\u200f', '\u061c'} {
+		if strings.ContainsRune(raw, r) {
+			t.Errorf("raw Code Climate output contains bidi rune U+%04X", r)
+		}
+	}
+	var issues []codeClimateIssue
+	if err := json.Unmarshal(buf.Bytes(), &issues); err != nil {
+		t.Fatalf("invalid Code Climate JSON: %v", err)
+	}
+	if issues[0].Description != msg || issues[0].Location.Path != file {
+		t.Errorf("round trip changed values: got description=%q path=%q", issues[0].Description, issues[0].Location.Path)
+	}
+}
+
 func TestWriteTable(t *testing.T) {
 	var buf bytes.Buffer
 	if err := Write(&buf, FormatTable, testFindingsWithJob, 3, false, false); err != nil {

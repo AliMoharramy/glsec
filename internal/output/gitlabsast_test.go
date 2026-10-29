@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode"
 
 	"github.com/glsec/glsec/internal/finding"
 )
@@ -106,6 +107,11 @@ func TestWriteGitLabSAST_Fields(t *testing.T) {
 	if strings.ContainsAny(v[4].Description, "\n\u202e") || !strings.Contains(v[4].Description, "\\u202e") {
 		t.Errorf("control and bidi characters not escaped: %q", v[4].Description)
 	}
+	for _, r := range []rune{'\u202a', '\u202b', '\u202c', '\u202d', '\u202e', '\u2066', '\u2067', '\u2068', '\u2069', '\u200e', '\u200f', '\u061c'} {
+		if strings.ContainsRune(buf.String(), r) {
+			t.Errorf("raw GitLab SAST output contains bidi rune U+%04X", r)
+		}
+	}
 	seen := map[string]bool{}
 	for _, x := range v {
 		if seen[x.ID] || len(x.ID) != 36 || x.ID[14] != '5' {
@@ -117,6 +123,39 @@ func TestWriteGitLabSAST_Fields(t *testing.T) {
 	_ = WriteGitLabSAST(&again, findings, meta)
 	if again.String() != buf.String() {
 		t.Error("report not deterministic")
+	}
+}
+
+// TestWriteGitLabSAST_DecodedFieldsHaveNoUnsafeCharacters pins what GitLab
+// relies on: it decodes the report before rendering a vulnerability, so a
+// JSON escape on its own would show the raw character again. The escape has
+// to survive decoding, which means escaping before the JSON encoder sees it.
+func TestWriteGitLabSAST_DecodedFieldsHaveNoUnsafeCharacters(t *testing.T) {
+	job := "job\u202etset"
+	file := "\u2066dir/file.yml"
+	msg := "a\u202bb\u2066c\u200ed\u061ce\x1b[31m\nnext"
+	findings := []finding.Finding{
+		{RuleID: "GL001", Severity: finding.Error, Job: job, File: file, Line: 1, Message: msg},
+	}
+	var buf bytes.Buffer
+	if err := WriteGitLabSAST(&buf, findings, GitLabSASTMeta{}); err != nil {
+		t.Fatal(err)
+	}
+	var report gitlabSASTReport
+	if err := json.Unmarshal(buf.Bytes(), &report); err != nil {
+		t.Fatalf("invalid GitLab SAST JSON: %v", err)
+	}
+	v := report.Vulnerabilities[0]
+	if want := Sanitize(msg) + " (job: " + Sanitize(job) + ")"; v.Description != want {
+		t.Errorf("description = %q, want %q", v.Description, want)
+	}
+	if v.Location.File != Sanitize(file) {
+		t.Errorf("file = %q, want %q", v.Location.File, Sanitize(file))
+	}
+	for _, s := range []string{v.Description, v.Location.File} {
+		if r := strings.IndexFunc(s, func(r rune) bool { return unicode.IsControl(r) || unsafeRune(r, false) }); r >= 0 {
+			t.Errorf("decoded GitLab SAST field %q contains unsafe rune %q", s, s[r])
+		}
 	}
 }
 
