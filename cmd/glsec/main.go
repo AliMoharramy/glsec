@@ -439,7 +439,11 @@ func scanRoot(file string, opt scanOptions) (findings []finding.Finding, jobCoun
 
 	skipSuppress := opt.generateIgnore || opt.noIgnores
 	for _, d := range allDocs {
-		f, u := collectFindings(d, d.File, opt.cfg, opt.gitlabVersion, skipSuppress, opt.newOnly)
+		f, u, err := collectFindings(d, d.File, opt.cfg, opt.gitlabVersion, skipSuppress, opt.newOnly)
+		if err != nil {
+			_, _ = fmt.Fprintf(opt.stderr, "error: %s: %v\n", suppress.IgnoreFile, output.Sanitize(err.Error()))
+			return nil, 0, 0, false
+		}
 		findings = append(findings, f...)
 		unjustified += u
 	}
@@ -769,7 +773,10 @@ func resolvePath(p string) (string, error) {
 // skipIgnoreFile drops the .glsec-ignore line suppression (but keeps inline
 // directives) so --new-only can diff the full backlog against the baseline by
 // fingerprint instead of by exact line.
-func collectFindings(doc *parser.Document, path string, cfg *config.Config, gitlabVersion gitlabver.Version, skipSuppress, skipIgnoreFile bool) ([]finding.Finding, int) {
+// An unreadable .glsec-ignore comes back as an error: the caller stops the run
+// with exit 2, like an unreadable config file, instead of silently scanning
+// without the suppressions.
+func collectFindings(doc *parser.Document, path string, cfg *config.Config, gitlabVersion gitlabver.Version, skipSuppress, skipIgnoreFile bool) ([]finding.Finding, int, error) {
 	sm := suppress.Build(doc.Root)
 	// Checked against the inline map only: the .glsec-ignore baseline has no
 	// reason column, so requiring one there would be unsatisfiable.
@@ -778,7 +785,11 @@ func collectFindings(doc *parser.Document, path string, cfg *config.Config, gitl
 		unjustified = reportUnjustified(sm, path)
 	}
 	if !skipIgnoreFile {
-		sm.Merge(suppress.LoadIgnoreFile(suppress.IgnoreFile, path))
+		ignore, err := suppress.LoadIgnoreFile(suppress.IgnoreFile, path)
+		if err != nil {
+			return nil, 0, err
+		}
+		sm.Merge(ignore)
 	}
 	now := time.Now()
 
@@ -840,7 +851,7 @@ func collectFindings(doc *parser.Document, path string, cfg *config.Config, gitl
 		}
 	}
 
-	return finding.Dedupe(findings), unjustified
+	return finding.Dedupe(findings), unjustified, nil
 }
 
 // reportUnjustified prints every inline suppression that carries no reason and

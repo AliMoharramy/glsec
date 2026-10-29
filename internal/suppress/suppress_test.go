@@ -151,7 +151,10 @@ func TestLoadIgnoreFile_Basic(t *testing.T) {
 	}
 	_ = f.Close()
 
-	m := LoadIgnoreFile(f.Name(), ".gitlab-ci.yml")
+	m, err := LoadIgnoreFile(f.Name(), ".gitlab-ci.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !m.IsSuppressed(7, "GL001", testNow) {
 		t.Error("GL001 on line 7 should be suppressed")
 	}
@@ -165,7 +168,10 @@ func TestLoadIgnoreFile_Basic(t *testing.T) {
 }
 
 func TestLoadIgnoreFile_Missing(t *testing.T) {
-	m := LoadIgnoreFile("/nonexistent/.glsec-ignore", ".gitlab-ci.yml")
+	m, err := LoadIgnoreFile("/nonexistent/.glsec-ignore", ".gitlab-ci.yml")
+	if err != nil {
+		t.Fatalf("a missing ignore file is not an error: %v", err)
+	}
 	if len(m) != 0 {
 		t.Error("expected empty map for missing ignore file")
 	}
@@ -238,7 +244,10 @@ func TestLoadIgnoreFile_Expiry(t *testing.T) {
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	m := LoadIgnoreFile(path, ".gitlab-ci.yml")
+	m, err := LoadIgnoreFile(path, ".gitlab-ci.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	now := mustTime(t, "2026-06-15")
 	if !m.IsSuppressed(4, "GL001", now) {

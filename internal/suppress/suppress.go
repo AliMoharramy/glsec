@@ -5,6 +5,8 @@ package suppress
 
 import (
 	"bufio"
+	"errors"
+	"io/fs"
 	"os"
 	"regexp"
 	"strconv"
@@ -152,15 +154,22 @@ func (m Map) Merge(other Map) {
 
 // LoadIgnoreFile reads a .glsec-ignore file and returns suppressions for the
 // given target file. Entries for other files are silently skipped.
-// Returns an empty map if the file does not exist.
+// A missing file is not an error: it returns an empty map and a nil error, so
+// repositories without a baseline keep scanning. Any other error opening or
+// reading the file, including a read that fails part way through, is returned
+// so an unreadable file fails the run like an unreadable .glsec.yml instead of
+// silently dropping every suppression.
 //
 // Line format: <file>:<line> <ruleID> [exp:YYYY-MM-DD]
 // The expiry token is optional, so files written by earlier versions still load.
-func LoadIgnoreFile(ignorePath, targetFile string) Map {
+func LoadIgnoreFile(ignorePath, targetFile string) (Map, error) {
 	m := make(Map)
 	f, err := os.Open(ignorePath) //nolint:gosec
 	if err != nil {
-		return m
+		if errors.Is(err, fs.ErrNotExist) {
+			return m, nil
+		}
+		return m, err
 	}
 	defer func() { _ = f.Close() }()
 
@@ -195,5 +204,8 @@ func LoadIgnoreFile(ignorePath, targetFile string) Map {
 		}
 		m.set(lineNum, ruleID, Entry{Expiry: expiry})
 	}
-	return m
+	if err := scanner.Err(); err != nil {
+		return m, err
+	}
+	return m, nil
 }

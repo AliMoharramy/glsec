@@ -6,7 +6,9 @@ package suppress
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 )
@@ -34,7 +36,10 @@ ci.yml:10 GL013 trailing words are ignored
 		t.Fatal(err)
 	}
 	now := time.Date(2026, 10, 15, 0, 0, 0, 0, time.UTC)
-	m := LoadIgnoreFile(path, "ci.yml")
+	m, err := LoadIgnoreFile(path, "ci.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	var got []string
 	for _, e := range m.Entries() {
@@ -61,7 +66,47 @@ ci.yml:10 GL013 trailing words are ignored
 }
 
 func TestLoadIgnoreFile_MissingFile(t *testing.T) {
-	if m := LoadIgnoreFile(filepath.Join(t.TempDir(), "none"), "ci.yml"); len(m) != 0 {
+	m, err := LoadIgnoreFile(filepath.Join(t.TempDir(), "none"), "ci.yml")
+	if err != nil {
+		t.Fatalf("a missing ignore file is not an error: %v", err)
+	}
+	if len(m) != 0 {
 		t.Errorf("a missing ignore file should give no suppressions, got %v", m)
+	}
+}
+
+// TestLoadIgnoreFile_Unreadable: a file that exists but cannot be opened is an
+// error, not silent suppressions, matching how an unreadable .glsec.yml fails.
+func TestLoadIgnoreFile_Unreadable(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Getuid() == 0 {
+		t.Skip("chmod 000 does not stop a Windows or root reader")
+	}
+	path := filepath.Join(t.TempDir(), ".glsec-ignore")
+	if err := os.WriteFile(path, []byte("ci.yml:3 GL001\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0); err != nil {
+		t.Fatal(err)
+	}
+	m, err := LoadIgnoreFile(path, "ci.yml")
+	if err == nil {
+		t.Fatal("an unreadable ignore file should be an error, not silent suppressions")
+	}
+	if len(m) != 0 {
+		t.Errorf("an unreadable ignore file should return no suppressions, got %v", m)
+	}
+}
+
+// TestLoadIgnoreFile_ReadError: a read that fails part way through, here a line
+// past bufio.Scanner's limit, is an error instead of silently losing the rest
+// of the file.
+func TestLoadIgnoreFile_ReadError(t *testing.T) {
+	path := filepath.Join(t.TempDir(), ".glsec-ignore")
+	content := "ci.yml:3 GL001\n" + strings.Repeat("x", 64*1024+1) + "\n"
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadIgnoreFile(path, "ci.yml"); err == nil {
+		t.Fatal("a read failure past the scanner limit should be an error, not silently dropped lines")
 	}
 }
