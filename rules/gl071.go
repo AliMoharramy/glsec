@@ -27,6 +27,7 @@ const defaultStage = "test"
 func (r *gl071) Check(doc *yaml.Node, file string) []finding.Finding {
 	mapping := parser.Unwrap(doc)
 	stageIdx := buildStageIndex(mapping)
+	in := NewInheritance(doc)
 
 	// Production-like deploy jobs, with their stage.
 	type deploy struct {
@@ -35,7 +36,11 @@ func (r *gl071) Check(doc *yaml.Node, file string) []finding.Finding {
 	}
 	var deploys []deploy
 	parser.EachJob(doc, func(name *yaml.Node, job *yaml.Node) {
-		if isHiddenJob(name.Value) || !isProdDeployJob(job) {
+		if isHiddenJob(name.Value) || !in.Has(job, "environment") {
+			return
+		}
+		job = in.Effective(job)
+		if !isProdDeployJob(job) {
 			return
 		}
 		if idx, ok := jobStageIndex(job, stageIdx); ok {
@@ -48,9 +53,10 @@ func (r *gl071) Check(doc *yaml.Node, file string) []finding.Finding {
 
 	var findings []finding.Finding
 	parser.EachJob(doc, func(name *yaml.Node, job *yaml.Node) {
-		if isHiddenJob(name.Value) {
+		if isHiddenJob(name.Value) || !in.Has(job, "when") {
 			return
 		}
+		job = in.Effective(job)
 		when := parser.FindKey(job, "when")
 		if when == nil || when.Kind != yaml.ScalarNode || when.Value != "manual" {
 			return

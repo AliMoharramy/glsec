@@ -159,6 +159,94 @@ func (in *Inheritance) chain(job *yaml.Node, key string, depth int, seen map[*ya
 	}
 }
 
+// Effective returns the job with what it inherits through extends: in this
+// file merged in, the way GitLab merges it: mappings key by key and
+// recursively, any other value replaced by the inheriting job's own; of
+// several extends: entries the later one wins. default: is not merged in. A
+// job without extends: is returned as is. Check ExtendsResolved first where a
+// base in another file could change the answer.
+func (in *Inheritance) Effective(job *yaml.Node) *yaml.Node {
+	return in.effective(job, 0)
+}
+
+// effective has no seen set: the depth limit already bounds a cycle, and the
+// common case, a job without extends:, then allocates nothing.
+func (in *Inheritance) effective(job *yaml.Node, depth int) *yaml.Node {
+	if job == nil || job.Kind != yaml.MappingNode || depth >= maxExtendsDepth {
+		return job
+	}
+	ext := parser.FindKey(job, "extends")
+	if ext == nil {
+		return job
+	}
+	parents := []*yaml.Node{ext}
+	if ext.Kind == yaml.SequenceNode {
+		parents = ext.Content
+	}
+	var merged *yaml.Node
+	for _, p := range parents {
+		if base := in.jobs[p.Value]; p.Kind == yaml.ScalarNode && base != nil {
+			merged = mergeMappings(merged, in.effective(base, depth+1))
+		}
+	}
+	return mergeMappings(merged, job)
+}
+
+// Has reports whether the job or a template it extends in this file sets key.
+// It allocates nothing, so a rule can call it before Effective to skip jobs
+// that inherit nothing it looks at.
+func (in *Inheritance) Has(job *yaml.Node, key string) bool {
+	return in.has(job, key, 0)
+}
+
+func (in *Inheritance) has(job *yaml.Node, key string, depth int) bool {
+	if job == nil || job.Kind != yaml.MappingNode || depth >= maxExtendsDepth {
+		return false
+	}
+	if parser.FindKey(job, key) != nil {
+		return true
+	}
+	ext := parser.FindKey(job, "extends")
+	switch {
+	case ext == nil:
+		return false
+	case ext.Kind == yaml.ScalarNode:
+		return in.has(in.jobs[ext.Value], key, depth+1)
+	}
+	for _, p := range ext.Content {
+		if p.Kind == yaml.ScalarNode && in.has(in.jobs[p.Value], key, depth+1) {
+			return true
+		}
+	}
+	return false
+}
+
+// mergeMappings returns over merged on top of base, without changing either.
+func mergeMappings(base, over *yaml.Node) *yaml.Node {
+	if base == nil || base.Kind != yaml.MappingNode || over.Kind != yaml.MappingNode {
+		return over
+	}
+	out := &yaml.Node{Kind: yaml.MappingNode, Tag: over.Tag, Line: over.Line, Column: over.Column}
+	out.Content = make([]*yaml.Node, len(base.Content), len(base.Content)+len(over.Content))
+	copy(out.Content, base.Content)
+	n := len(base.Content)
+	// A job has a few dozen keys at most: a linear search allocates nothing.
+	for i := 0; i+1 < len(over.Content); i += 2 {
+		k, v := over.Content[i], over.Content[i+1]
+		j := 0
+		for j+1 < n && out.Content[j].Value != k.Value {
+			j += 2
+		}
+		if j+1 < n {
+			out.Content[j] = k
+			out.Content[j+1] = mergeMappings(out.Content[j+1], v)
+			continue
+		}
+		out.Content = append(out.Content, k, v)
+	}
+	return out
+}
+
 // ExtendsResolved reports whether every job in the job's extends: chain is
 // defined in this file, so Key sees everything the job inherits.
 func (in *Inheritance) ExtendsResolved(job *yaml.Node) bool {

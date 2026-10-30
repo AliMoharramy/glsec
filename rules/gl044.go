@@ -30,8 +30,13 @@ var mrSourceSHARe = regexp.MustCompile(`\$\{?CI_MERGE_REQUEST_SOURCE_BRANCH_SHA\
 
 func (r *gl044) Check(doc *yaml.Node, file string) []finding.Finding {
 	var findings []finding.Finding
+	in := NewInheritance(doc)
 
 	parser.EachJob(doc, func(name *yaml.Node, job *yaml.Node) {
+		if !in.Has(job, "rules") && !in.Has(job, "only") {
+			return
+		}
+		job = in.Effective(job)
 		if !jobHasMRTrigger(job) {
 			return
 		}
