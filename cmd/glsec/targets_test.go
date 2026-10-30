@@ -6,6 +6,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -47,6 +48,79 @@ func TestResolveTargets_Glob(t *testing.T) {
 	}
 	if len(got) != 2 {
 		t.Fatalf("expected 2 glob matches, got %v", got)
+	}
+}
+
+func TestResolveTargets_DirectoryScansItsPipeline(t *testing.T) {
+	dir := t.TempDir()
+	sub := filepath.Join(dir, "sub")
+	writeFile(t, filepath.Join(sub, ".gitlab-ci.yml"))
+
+	got, err := resolveTargets([]string{sub}, false, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Slash form is canonical: on Windows the directory form must name
+	// the file sub/.gitlab-ci.yml, matching the explicit file form.
+	want := filepath.ToSlash(filepath.Join(sub, ".gitlab-ci.yml"))
+	if len(got) != 1 || got[0] != want {
+		t.Fatalf("expected [%s], got %v", want, got)
+	}
+}
+
+func TestRun_DirectoryScansItsPipeline(t *testing.T) {
+	files := map[string]string{"sub/.gitlab-ci.yml": errorPipeline}
+
+	dirCode, dirOut, _ := runCLI(t, files, "sub")
+	fileCode, fileOut, _ := runCLI(t, files, "sub/.gitlab-ci.yml")
+	if dirCode != fileCode {
+		t.Fatalf("run(sub) exit code = %d, run(sub/.gitlab-ci.yml) = %d", dirCode, fileCode)
+	}
+	if dirOut != fileOut {
+		t.Fatalf("run(sub) output differs from run(sub/.gitlab-ci.yml):\nsub:\n%s\nfile:\n%s", dirOut, fileOut)
+	}
+	if !strings.Contains(dirOut, "sub/.gitlab-ci.yml") {
+		t.Fatalf("run(sub) output does not name sub/.gitlab-ci.yml:\n%s", dirOut)
+	}
+}
+
+func TestRun_DirectoryWithoutPipelineErrors(t *testing.T) {
+	code, _, stderr := runCLI(t, map[string]string{"empty/keep.txt": "keep"}, "empty")
+	if code != 2 {
+		t.Fatalf("run(empty) exit code = %d, want 2", code)
+	}
+	if !strings.Contains(stderr, "empty is a directory without a .gitlab-ci.yml") {
+		t.Fatalf("run(empty) stderr does not report the missing pipeline:\n%s", stderr)
+	}
+}
+
+func TestResolveTargets_DirectoryPipelineStatErrorReturnsRawError(t *testing.T) {
+	dir := t.TempDir()
+	sub := filepath.Join(dir, "sub")
+	if err := os.MkdirAll(sub, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	// A symlink loop makes stat fail with an error other than ErrNotExist.
+	if err := os.Symlink(filepath.Join(sub, ".gitlab-ci.yml"), filepath.Join(sub, ".gitlab-ci.yml")); err != nil {
+		t.Fatal(err)
+	}
+	_, err := resolveTargets([]string{sub}, false, nil)
+	if err == nil {
+		t.Fatal("expected error for a directory whose .gitlab-ci.yml cannot be statted")
+	}
+	if strings.Contains(err.Error(), "without a .gitlab-ci.yml") {
+		t.Fatalf("expected the raw stat error, got the missing-pipeline message: %v", err)
+	}
+}
+
+func TestResolveTargets_DirectoryWithoutPipelineErrors(t *testing.T) {
+	dir := t.TempDir()
+	sub := filepath.Join(dir, "empty")
+	if err := os.MkdirAll(sub, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := resolveTargets([]string{sub}, false, nil); err == nil {
+		t.Error("expected error for a directory without a .gitlab-ci.yml")
 	}
 }
 
