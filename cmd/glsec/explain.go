@@ -4,6 +4,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"io"
 	"regexp"
@@ -15,6 +16,27 @@ import (
 	"github.com/glsec/glsec/internal/output"
 	"github.com/glsec/glsec/rules"
 )
+
+func runExplainArgs(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("explain", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	noColor := fs.Bool("no-color", false, "disable colored output")
+	fs.Usage = func() {
+		_, _ = fmt.Fprintln(stderr, "usage: glsec explain [--no-color] <RULE-ID>")
+		fs.PrintDefaults()
+	}
+	if err := parseFlags(fs, args); err != nil {
+		if err == flag.ErrHelp {
+			return 0
+		}
+		return 2
+	}
+	if fs.NArg() != 1 {
+		fs.Usage()
+		return 2
+	}
+	return runExplain(fs.Arg(0), *noColor, stdout, stderr)
+}
 
 func runExplain(ruleID string, noColor bool, stdout, stderr io.Writer) int {
 	id := strings.ToUpper(ruleID)

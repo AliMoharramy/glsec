@@ -55,27 +55,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runInventory(args[1:], stdout, stderr)
 	}
 	if len(args) >= 1 && args[0] == "explain" {
-		if len(args) < 2 {
-			_, _ = fmt.Fprintln(stderr, "usage: glsec explain <RULE-ID>")
-			return 2
-		}
-		noColor := false
-		ruleID := ""
-		for _, arg := range args[1:] {
-			switch arg {
-			case "--no-color", "-no-color":
-				noColor = true
-			default:
-				if !strings.HasPrefix(arg, "-") && ruleID == "" {
-					ruleID = arg
-				}
-			}
-		}
-		if ruleID == "" {
-			_, _ = fmt.Fprintln(stderr, "usage: glsec explain <RULE-ID>")
-			return 2
-		}
-		return runExplain(ruleID, noColor, stdout, stderr)
+		return runExplainArgs(args[1:], stdout, stderr)
 	}
 
 	flags := flag.NewFlagSet("glsec", flag.ContinueOnError)
@@ -127,9 +107,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 		_, _ = fmt.Fprintln(stderr, "       glsec list [--format text|json] [--owasp CICD-SEC-N]")
 		_, _ = fmt.Fprintln(stderr, "       glsec inventory [--format cyclonedx] [file]")
 		_, _ = fmt.Fprintln(stderr, "       If no file is given, glsec looks for .gitlab-ci.yml in the current directory.")
+		_, _ = fmt.Fprintln(stderr, "       Flags may appear before or after files; -- ends flag parsing.")
 		flags.PrintDefaults()
 	}
-	if err := flags.Parse(args); err != nil {
+	if err := parseFlags(flags, args); err != nil {
 		if err == flag.ErrHelp {
 			return 0
 		}

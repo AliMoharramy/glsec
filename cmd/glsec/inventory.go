@@ -31,7 +31,7 @@ func runInventory(args []string, stdout, stderr io.Writer) int {
 		_, _ = fmt.Fprintln(stderr, "       or with --format jobs the jobs glsec scans, as JSON.")
 		fs.PrintDefaults()
 	}
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
 		if err == flag.ErrHelp {
 			return 0
 		}

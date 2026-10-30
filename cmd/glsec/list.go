@@ -32,13 +32,17 @@ func runList(args []string, stdout, stderr io.Writer) int {
 		_, _ = fmt.Fprintln(stderr, "usage: glsec list [--format text|json] [--owasp CICD-SEC-N]")
 		fs.PrintDefaults()
 	}
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
 		if err == flag.ErrHelp {
 			return 0
 		}
 		return 2
 	}
 
+	if fs.NArg() != 0 {
+		fs.Usage()
+		return 2
+	}
 	wantOWASP := strings.ToUpper(strings.TrimSpace(*owaspFilter))
 
 	var infos []ruleInfo

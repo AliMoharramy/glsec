@@ -102,6 +102,8 @@ To check the download before running it, see [Verifying a release](#verifying-a-
 
 ## Usage
 
+Flags may appear before or after file names: `glsec .gitlab-ci.yml --format json` works like `glsec --format json .gitlab-ci.yml`. The same parsing applies to `explain`, `list` and `inventory`. Use `--` to end flag parsing; for example, `glsec -- --format` scans a file literally named `--format`.
+
 ```sh
 # scan a file (exits 1 on error findings, 0 if clean, 2 on parse error)
 glsec .gitlab-ci.yml
