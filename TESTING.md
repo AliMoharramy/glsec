@@ -18,6 +18,7 @@ glsec decides what a security review of a pipeline reports, so a wrong answer co
 | [Consistency tests](CONTRIBUTING.md#step-4--satisfy-the-consistency-tests) | a rule without fixture, docs page, OWASP or CWE mapping; doc examples that don't trigger, or safe examples that do | every pull request |
 | [Fixtures](CONTRIBUTING.md#fixture-validation), checked against the GitLab CI schema and GitLab's CI Lint API | test pipelines and doc examples GitLab would reject | every pull request (the CI Lint part after merge for forks) |
 | [Regression corpus](CONTRIBUTING.md#regression-corpus) with snapshot files | a fixed false positive or missed finding coming back | every pull request |
+| [Finding identity snapshot](CONTRIBUTING.md#finding-identity-snapshots) | a message, path, report identifier or baseline key change that silently makes existing findings appear new | every pull request |
 | [Metamorphic test](CONTRIBUTING.md#metamorphic-test) | rules that match on how the YAML is written instead of what it means (quoting, flow style, CRLF, job order, anchors, `extends:`) | every pull request |
 | [Fuzzing](CONTRIBUTING.md#fuzzing) of the parser, the rules and a whole scan | crashes and hangs on hostile or broken YAML | short runs on pull requests and `main`, longer runs weekly |
 | [Linear scaling test](CONTRIBUTING.md#performance) | a rule whose run time grows faster than the pipeline | every pull request |

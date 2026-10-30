@@ -48,6 +48,20 @@ go test -race ./...             # with race detector (what CI runs)
 go test ./rules/... -v -run GL001  # single rule
 ```
 
+### Finding identity snapshots
+
+`TestFindingIdentities` pins the report fingerprints, identifiers and baseline key fields of a fixed set of real rule findings in `internal/output/testdata/finding-identities.golden.json`. It runs with relative and absolute input paths, and loads the saved JSON and ignore-file keys through the baseline matcher. This catches message, job, path or fingerprint changes that would make existing findings appear new after an upgrade.
+
+If the test fails, inspect the difference before updating anything. Keep its pipeline inputs and rule selection fixed: changing them to make the test pass would hide a compatibility change. For an intentional change, add an upgrade note to the PR description identifying affected report formats or baselines and any one-time resolved/new findings users should expect. Then update and review the snapshot:
+
+```sh
+go test ./internal/output -run '^TestFindingIdentities$' -update
+git diff -- internal/output/testdata/finding-identities.golden.json
+go test ./internal/output -run '^TestFindingIdentities$'
+```
+
+The golden file stores portable key fields rather than the baseline matcher's private in-memory keys; the matcher tests check the compatibility users depend on. No new public API is needed to expose those internals.
+
 ### Coverage
 
 CI fails when statement coverage (`go test -cover`) drops below 92 % or branch coverage below 85 %. Branch coverage is measured with [gobco](https://github.com/rillig/gobco), one package at a time:
